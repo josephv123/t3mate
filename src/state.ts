@@ -29,6 +29,8 @@ export interface CrewMember {
     /** The thread's last-activity time when we reported it stalled: one report per quiet spell. */
     stallNotifiedActivityAt?: string;
     longRunningNotifiedTurnId?: string;
+    /** origin/<base> commit this crewmate is known to be based on (or was last told about). */
+    baseSha?: string;
   };
 }
 

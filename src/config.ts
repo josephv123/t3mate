@@ -26,6 +26,8 @@ export interface Config {
      */
     start_from_origin: StartFromOrigin;
     run_setup_script: boolean;
+    /** When origin/<base> moves, tell running crewmates on that base to rebase before they push. */
+    notify_base_moves: boolean;
   };
   /** Aliases usable anywhere a model spec is accepted: "instance:model" or a table. */
   models: Record<string, string | { model: string; options?: Record<string, unknown> }>;
@@ -52,6 +54,7 @@ export const DEFAULTS: Config = {
     worktree: true,
     start_from_origin: "auto",
     run_setup_script: true,
+    notify_base_moves: true,
   },
   models: {},
   instructions: { firstmate: "", crew: "" },

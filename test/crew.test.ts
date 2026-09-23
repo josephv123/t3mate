@@ -16,8 +16,8 @@ for (const who of ["AUTHOR", "COMMITTER"]) {
   process.env[`GIT_${who}_EMAIL`] = "test@t3mate.invalid";
 }
 const { DEFAULTS, loadConfig } = await import("../src/config.ts");
-const { coalesceEvents, detectLongRunning, detectStall, duration, isOutdated } = await import("../src/daemon.ts");
-const { compareWithOrigin, forkPoint, pickSpawnBase, resolveSpawnBase } = await import("../src/git.ts");
+const { baseMoveAction, coalesceEvents, detectLongRunning, detectStall, duration, isOutdated } = await import("../src/daemon.ts");
+const { baseMoveMessage, compareWithOrigin, forkPoint, newCommits, pickSpawnBase, resolveSpawnBase } = await import("../src/git.ts");
 const { broadcastTargets, emptyState } = await import("../src/state.ts");
 type ShellThread = import("../src/t3.ts").ShellThread;
 type CrewEvent = import("../src/state.ts").CrewEvent;
@@ -183,11 +183,43 @@ test("spawn base: auto starts from origin only when the local base is strictly b
 
 test("config: start_from_origin defaults to auto and rejects anything but true, false or auto", () => {
   assert.equal(DEFAULTS.crew.start_from_origin, "auto");
+  assert.equal(DEFAULTS.crew.notify_base_moves, true);
   const root = mkdtempSync(join(tmpdir(), "t3mate-proj-"));
   writeFileSync(join(root, ".t3mate.toml"), `[crew]\nstart_from_origin = "sometimes"\n`);
   assert.throws(() => loadConfig(root), /start_from_origin must be true, false or "auto"/);
   writeFileSync(join(root, ".t3mate.toml"), `[crew]\nstart_from_origin = false\n`);
   assert.equal(loadConfig(root).crew.start_from_origin, false);
+});
+
+test("base move message: capped short log, then the rebase instruction", () => {
+  assert.equal(
+    baseMoveMessage("main", "c3c3c3c3", { total: 2, lines: ["c3c3c3c Fix login redirect (#41)", "b2b2b2b Add dark mode (#40)"] }),
+    [
+      "[t3mate] origin/main moved (2 new commits):",
+      "- c3c3c3c Fix login redirect (#41)",
+      "- b2b2b2b Add dark mode (#40)",
+      "Rebase onto origin/main before you push or open a PR.",
+    ].join("\n"),
+  );
+  const lines = ["a", "b", "c", "d", "e", "f", "g"].map((x) => `${x.repeat(7)} commit ${x}`);
+  const capped = baseMoveMessage("dev", "ffff", { total: 12, lines });
+  assert.match(capped, /^\[t3mate\] origin\/dev moved \(12 new commits\):\n- aaaaaaa commit a\n/);
+  assert.equal(capped.split("\n").filter((l) => /^- [a-g]{7} /.test(l)).length, 5);
+  assert.match(capped, /\n- … and 7 more\nRebase onto origin\/dev before you push or open a PR\.$/);
+  assert.match(baseMoveMessage("main", "1234567890", { total: 1, lines: ["1234567 One"] }), /moved \(1 new commit\):/);
+  assert.equal(baseMoveMessage("main", "1234567890", null), "[t3mate] origin/main moved to 1234567.\nRebase onto origin/main before you push or open a PR.");
+});
+
+test("base move: tell running crewmates once per move; skip idle, prompted, stalled and main-checkout ones", () => {
+  const c = (baseSha?: string) => ({ ...mate(1, "t1"), watch: baseSha ? { baseSha } : {} });
+  const action = (m: CrewMember, t: ShellThread) => baseMoveAction(m, t, "new", NOW, 15);
+  assert.equal(action(c(), thread()), "record");
+  assert.equal(action(c("new"), thread()), "skip");
+  assert.equal(action(c("old"), thread()), "notify");
+  assert.equal(action(c("old"), thread({ turnState: "completed" })), "skip", "finished and idle");
+  assert.equal(action(c("old"), thread({ hasPendingUserInput: true })), "skip");
+  assert.equal(action(c("old"), thread({ quietMins: 20 })), "skip", "stalled: the notice would mask the stall");
+  assert.equal(action(c("old"), thread({ worktreePath: null })), "skip");
 });
 
 // Real repos: an "origin" bare repo, the project checkout, and a second clone standing in for merged PRs.
@@ -234,4 +266,16 @@ test("forkPoint: a crewmate branched from origin/<base> forks there, not at a st
   git(project, "checkout", "-q", "-b", "crew", "origin/main");
   git(project, "commit", "-q", "--allow-empty", "-m", "crew work");
   assert.equal(forkPoint(project, "main"), head);
+});
+
+test("newCommits lists what landed on origin/<base> since a commit", () => {
+  const { project, land } = repos();
+  const before = git(project, "rev-parse", "HEAD");
+  land("PR one (#1)", "PR two (#2)");
+  git(project, "fetch", "-q", "origin");
+  const head = git(project, "rev-parse", "origin/main");
+  const log = newCommits(project, before, head)!;
+  assert.equal(log.total, 2);
+  assert.deepEqual(log.lines.map((l) => l.replace(/^\w+ /, "")), ["PR two (#2)", "PR one (#1)"]);
+  assert.equal(newCommits(project, "0000000000000000000000000000000000000000", head), null);
 });

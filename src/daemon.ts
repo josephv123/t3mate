@@ -1,12 +1,14 @@
 // Zero-token supervision: poll T3's shell snapshot, turn crew state changes into
 // events, and deliver them to the first mate's thread as one message once it is idle.
+// Also tells running crewmates when origin/<base> moves under them.
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseStatus } from "./brief.ts";
 import type { Config } from "./config.ts";
 import { loadConfig } from "./config.ts";
+import { baseMoveMessage, fetchBase, hasOrigin, isAncestor, newCommits, originHead } from "./git.ts";
 import type { CrewEvent, CrewMember, ProjectState } from "./state.ts";
-import { TERMINAL_EVENTS, listStates, withState } from "./state.ts";
+import { TERMINAL_EVENTS, listStates, liveCrew, withState } from "./state.ts";
 import type { Collapsed, ShellThread } from "./t3.ts";
 import {
   getShell,
@@ -161,6 +163,52 @@ async function crewEvents(c: CrewMember, t: ShellThread | undefined, daemon: Con
   return events;
 }
 
+/** What to do about origin/<base> being at `head` for this crewmate. */
+export function baseMoveAction(
+  c: CrewMember,
+  t: ShellThread,
+  head: string,
+  now: number,
+  stallMinutes: number,
+): "record" | "notify" | "skip" {
+  if (!t.worktreePath) return "skip"; // works in the main checkout, on the base itself
+  if (!c.watch.baseSha) return "record"; // no baseline yet (spawned before t3mate tracked it)
+  if (c.watch.baseSha === head) return "skip";
+  // Idle crewmates aren't woken for this; they hear about it once they're running again.
+  // Don't talk over a pending approval or question either, or into a stall: the message would
+  // count as activity and hide the stall from the first mate.
+  if (!isBusy(t) || t.hasPendingApprovals || t.hasPendingUserInput) return "skip";
+  if (stallMinutes > 0 && now - Date.parse(lastActivityAt(t)) >= stallMinutes * 60_000) return "skip";
+  return "notify";
+}
+
+/** One message per running crewmate per move of its origin/<base>, unless its branch already has it. */
+async function notifyBaseMoves(
+  state: ProjectState,
+  threads: Map<string, ShellThread>,
+  heads: Map<string, string>,
+  stallMinutes: number,
+): Promise<void> {
+  for (const { c, t } of liveCrew(state, (id) => threads.get(id))) {
+    const head = c.baseBranch ? heads.get(c.baseBranch) : undefined;
+    if (!head || !c.baseBranch) continue;
+    const action = baseMoveAction(c, t, head, Date.now(), stallMinutes);
+    if (action === "skip") continue;
+    if (action === "record" || isAncestor(t.worktreePath!, head, "HEAD")) {
+      c.watch.baseSha = head;
+      continue;
+    }
+    const commits = newCommits(state.root, c.watch.baseSha!, head);
+    try {
+      await sendMessage(t, baseMoveMessage(c.baseBranch, head, commits));
+      c.watch.baseSha = head;
+      log(`${state.title} #${c.n}: told it origin/${c.baseBranch} moved to ${head.slice(0, 7)}`);
+    } catch (error) {
+      log(`${state.title} #${c.n}: base-move notice failed: ${(error as Error).message}`);
+    }
+  }
+}
+
 /**
  * One short line for the captain (a chip in T3); the details and instructions inside it are for
  * the first mate. Crewmates are named by their live T3 thread title — what the captain sees in the sidebar.
@@ -181,7 +229,7 @@ export function formatUpdate(state: ProjectState, events: CrewEvent[], threads: 
   };
 }
 
-async function tickProject(projectId: string, threads: Map<string, ShellThread>): Promise<void> {
+async function tickProject(projectId: string, threads: Map<string, ShellThread>, baseHeads: Map<string, string>): Promise<void> {
   await withState(
     projectId,
     () => {
@@ -202,6 +250,8 @@ async function tickProject(projectId: string, threads: Map<string, ShellThread>)
       const current = coalesceEvents(state.pending).filter((e) => !isOutdated(e, crewThread(e.n)));
       for (const e of state.pending.filter((e) => !current.includes(e))) log(`${state.title} #${e.n} ${e.kind}: dropped, superseded or no longer true`);
       state.pending = current;
+
+      if (baseHeads.size) await notifyBaseMoves(state, threads, baseHeads, config.daemon.stall_minutes);
 
       if (!state.pending.length || !state.firstMate) return;
 
@@ -224,6 +274,38 @@ async function tickProject(projectId: string, threads: Map<string, ShellThread>)
   );
 }
 
+/** How often each project's origin/<base> is fetched while crewmates are running on it. */
+const BASE_CHECK_MS = 60_000;
+const lastBaseCheck = new Map<string, number>();
+const lastFetchError = new Map<string, string>();
+
+/**
+ * Fetch origin/<base> for the bases running crewmates work on, at most once a minute per
+ * project, and return where each one is now. Runs outside the state lock: fetches can be slow.
+ */
+function checkBases(s: ProjectState, threads: Map<string, ShellThread>): Map<string, string> {
+  const heads = new Map<string, string>();
+  if (!loadConfig(s.root).crew.notify_base_moves) return heads;
+  const running = liveCrew(s, (id) => threads.get(id)).filter(({ c, t }) => c.baseBranch && t.worktreePath && isBusy(t));
+  const bases = new Set(running.map(({ c }) => c.baseBranch!));
+  if (!bases.size || Date.now() - (lastBaseCheck.get(s.projectId) ?? 0) < BASE_CHECK_MS) return heads;
+  lastBaseCheck.set(s.projectId, Date.now());
+  if (!hasOrigin(s.root)) return heads;
+  for (const base of bases) {
+    const key = `${s.projectId} ${base}`;
+    const error = fetchBase(s.root, base);
+    if (error) {
+      if (lastFetchError.get(key) !== error) log(`${s.title}: couldn't fetch origin/${base}: ${error}`); // once, not every minute
+      lastFetchError.set(key, error);
+      continue;
+    }
+    lastFetchError.delete(key);
+    const head = originHead(s.root, base);
+    if (head) heads.set(base, head);
+  }
+  return heads;
+}
+
 export async function tick(): Promise<void> {
   const states = listStates().filter((s) => s.pending.length || s.crew.some((c) => c.status === "active"));
   if (!states.length) return;
@@ -231,7 +313,7 @@ export async function tick(): Promise<void> {
   const threads = new Map(shell.threads.map((t) => [t.id, t]));
   for (const s of states) {
     try {
-      await tickProject(s.projectId, threads);
+      await tickProject(s.projectId, threads, checkBases(s, threads));
     } catch (error) {
       log(`${s.title}: ${(error as Error).message}`);
     }

@@ -64,6 +64,7 @@ const CONFIG_TEMPLATE = `# t3mate global config. Layers (later wins):
 # worktree = true                # each crewmate gets its own T3 worktree
 # start_from_origin = "auto"     # auto: origin/<base> when the local base is only behind it; true/false to force
 # run_setup_script = true        # run the T3 project's worktree setup script
+# notify_base_moves = true       # tell running crewmates to rebase when origin/<base> moves
 
 [models]
 # fast = "codex:gpt-5.6-luna"

@@ -1,8 +1,11 @@
-// Plain git for the crew's base branch (not T3's API): where new worktrees start.
+// Plain git for the crew's base branch (not T3's API): where new worktrees start, and
+// noticing when origin/<base> moves under running crewmates.
 import type { StartFromOrigin } from "./config.ts";
 import { oneLine, plural, run, tryRun } from "./util.ts";
 
 const FETCH_TIMEOUT_MS = 30_000;
+/** Most commits listed in a base-move notice. */
+export const BASE_MOVE_LOG_LIMIT = 5;
 
 const git = (cwd: string, args: string[]): string | null => tryRun("git", args, { cwd });
 const originRef = (base: string): string => `refs/remotes/origin/${base}`;
@@ -54,6 +57,37 @@ export function forkPoint(cwd: string, base: string): string | null {
     .map((ref) => git(cwd, ["merge-base", ref, "HEAD"]))
     .filter((sha): sha is string => !!sha);
   return candidates.reduce<string | null>((best, sha) => (best === null || (sha !== best && isAncestor(cwd, best, sha)) ? sha : best), null);
+}
+
+export interface CommitLog {
+  /** First-parent commits in from..to: one per merged PR on a merge-commit base. */
+  total: number;
+  /** Newest first, `<short sha> <subject>`, at most BASE_MOVE_LOG_LIMIT. */
+  lines: string[];
+}
+
+/** New commits on the base between two commits; null if `from` isn't known in this repo. */
+export function newCommits(root: string, from: string, to: string): CommitLog | null {
+  const range = `${from}..${to}`;
+  const total = git(root, ["rev-list", "--first-parent", "--count", range]);
+  if (total === null) return null;
+  const log = git(root, ["log", "--first-parent", `--max-count=${BASE_MOVE_LOG_LIMIT}`, "--format=%h %s", range]) ?? "";
+  return { total: Number(total), lines: log ? log.split("\n") : [] };
+}
+
+/** The notice a running crewmate gets when origin/<base> moves under it. */
+export function baseMoveMessage(base: string, head: string, commits: CommitLog | null): string {
+  const remote = `origin/${base}`;
+  const shown = commits?.lines.slice(0, BASE_MOVE_LOG_LIMIT) ?? [];
+  const summary =
+    commits && commits.total > 0
+      ? [
+          `[t3mate] ${remote} moved (${plural(commits.total, "new commit")}):`,
+          ...shown.map((line) => `- ${oneLine(line, 100)}`),
+          ...(commits.total > shown.length ? [`- … and ${commits.total - shown.length} more`] : []),
+        ]
+      : [`[t3mate] ${remote} moved to ${head.slice(0, 7)}.`];
+  return [...summary, `Rebase onto ${remote} before you push or open a PR.`].join("\n");
 }
 
 export interface SpawnBase {

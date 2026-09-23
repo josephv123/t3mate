@@ -3,7 +3,7 @@ import { crewBrief, crewState, crewTable, firstMateBrief, parseStatus } from "./
 import type { Config } from "./config.ts";
 import { loadConfig, resolveModel } from "./config.ts";
 import { daemonPid, runDaemon, tick } from "./daemon.ts";
-import { forkPoint, resolveSpawnBase } from "./git.ts";
+import { forkPoint, localHead, originHead, resolveSpawnBase } from "./git.ts";
 import { DAEMON_LOG, daemonInstall, daemonRestart, daemonUninstall, doctor, install, uninstall } from "./install.ts";
 import { currentBranch, resolveProject } from "./project.ts";
 import type { CrewMember, ProjectState } from "./state.ts";
@@ -194,6 +194,8 @@ async function cmdSpawn(args: Args): Promise<void> {
     startFromOrigin: start.fromOrigin,
     runSetupScript: ctx.config.crew.run_setup_script,
   });
+  // What the worktree started from, so the daemon can tell when origin/<base> moves past it.
+  const baseSha = worktree && baseBranch ? ((start.fromOrigin ? originHead(root, baseBranch) : localHead(root, baseBranch)) ?? undefined) : undefined;
   await withState(ctx.project.id, ctx.init, (s) => {
     s.crew.push({
       n,
@@ -205,7 +207,7 @@ async function cmdSpawn(args: Args): Promise<void> {
       model: `${modelSelection.instanceId}:${modelSelection.model}`,
       createdAt: nowIso(),
       status: "active",
-      watch: {},
+      watch: baseSha ? { baseSha } : {},
     });
   });
   console.log(
