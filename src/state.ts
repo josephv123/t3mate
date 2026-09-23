@@ -4,7 +4,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { InteractionMode, RuntimeMode } from "./t3.ts";
-import { T3MATE_HOME, sleep } from "./util.ts";
+import { T3MATE_HOME, fail, sleep } from "./util.ts";
 
 export type CrewKind = "ship" | "scout";
 
@@ -122,7 +122,24 @@ export async function withState<T>(
   }
 }
 
+/** Shortest thread-id prefix accepted as a crewmate handle. */
+const MIN_THREAD_PREFIX = 8;
+
+/**
+ * Resolve a crewmate handle. A number ("9" or "#9") is always the crew number,
+ * never a thread-id prefix. Anything else is a full T3 thread id, or a unique
+ * prefix of one at least MIN_THREAD_PREFIX characters long.
+ */
 export function findCrew(state: ProjectState, ref: string): CrewMember | undefined {
-  const n = Number(ref.replace(/^#/, ""));
-  return state.crew.find((c) => c.n === n || c.threadId === ref || c.threadId.startsWith(ref));
+  const id = ref.trim();
+  const number = /^#?(\d+)$/.exec(id);
+  if (number) return state.crew.find((c) => c.n === Number(number[1]));
+  const exact = state.crew.find((c) => c.threadId === id);
+  if (exact || id.length < MIN_THREAD_PREFIX) return exact;
+  const matches = state.crew.filter((c) => c.threadId.startsWith(id));
+  if (matches.length > 1) {
+    const candidates = matches.map((c) => `#${c.n} (${c.threadId})`).join(", ");
+    fail(`"${ref}" matches more than one crewmate: ${candidates}. Use the crew number or the full thread id.`);
+  }
+  return matches[0];
 }

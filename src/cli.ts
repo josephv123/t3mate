@@ -26,6 +26,7 @@ First mate (that thread) uses:
   send <n> "<message>"               follow up with / steer a crewmate
   stop <n>                           interrupt a crewmate's running turn
   archive <n>...                     retire crewmates (archives their T3 threads)
+      <n> is the crew number (3 or #3) or the crewmate's T3 thread id
   backlog add "<text>" | list | done <n> | rm <n>
 
 Setup:
@@ -91,8 +92,8 @@ async function context(): Promise<Ctx> {
 }
 
 function crewOrFail(state: ProjectState, ref: string | undefined): CrewMember {
-  if (!ref) fail("Which crewmate? Pass its number, e.g. `3` or `#3`.");
-  return findCrew(state, ref) ?? fail(`No crewmate ${ref} in ${state.title}. See \`t3mate list --all\`.`);
+  if (!ref) fail("Which crewmate? Pass its number, e.g. `3` or `#3`, or its T3 thread id.");
+  return findCrew(state, ref) ?? fail(`No crewmate ${ref} in ${state.title}. Pass its number or its full T3 thread id; see \`t3mate list --all\`.`);
 }
 
 async function taskText(args: Args, from: number): Promise<string> {

@@ -10,7 +10,7 @@ process.env.T3MATE_HOME = home;
 const { loadConfig, resolveModel, DEFAULTS } = await import("../src/config.ts");
 const { parseStatus, crewBrief } = await import("../src/brief.ts");
 const { formatUpdate } = await import("../src/daemon.ts");
-const { emptyState } = await import("../src/state.ts");
+const { emptyState, findCrew } = await import("../src/state.ts");
 
 test("parseStatus reads the last T3MATE line in any dash style", () => {
   assert.deepEqual(parseStatus("work\nT3MATE: done — fixed it"), { status: "done", summary: "fixed it" });
@@ -74,4 +74,30 @@ test("skill variants differ only in frontmatter", async () => {
   const body = (variant: string) =>
     readFileSync(new URL(`../skills/${variant}/t3mate/SKILL.md`, import.meta.url), "utf8").replace(/^---\n[\s\S]*?\n---\n/, "");
   assert.equal(body("claude"), body("codex"));
+});
+
+test("findCrew: numbers are crew numbers, otherwise exact or unique long thread-id prefixes", () => {
+  const state = emptyState("p", "/r", "proj");
+  const mate = (n: number, threadId: string) =>
+    state.crew.push({ n, threadId, title: `c${n}`, kind: "ship", task: "", baseBranch: "main", model: "m", createdAt: "", status: "active", watch: {} });
+  mate(2, "9d0657f4-5b1e-4c7a-9f0e-2a3b4c5d6e7f");
+  mate(9, "938bcbe0-1a2b-4c3d-8e4f-5a6b7c8d9e0f");
+  mate(12, "abcdef01-0000-4000-8000-000000000001");
+  mate(13, "abcdef01-0000-4000-8000-000000000002");
+  const n = (ref: string) => findCrew(state, ref)?.n;
+
+  // Regression: "9" once resolved to #2 because #2's thread id starts with "9".
+  assert.equal(n("9"), 9);
+  assert.equal(n("#9"), 9);
+  assert.equal(n("2"), 2);
+  assert.equal(n("#2"), 2);
+  assert.equal(n("938"), undefined);
+  assert.equal(n("7"), undefined);
+
+  assert.equal(n("9d0657f4-5b1e-4c7a-9f0e-2a3b4c5d6e7f"), 2);
+  assert.equal(n("938bcbe0-1a2b-4c3d-8e4f-5a6b7c8d9e0f"), 9);
+  assert.equal(n("9d0657f4"), 2);
+  assert.equal(n("9d0657f"), undefined);
+  assert.equal(n("abcdef01-0000-4000-8000-000000000002"), 13);
+  assert.throws(() => findCrew(state, "abcdef01-0000"), /matches more than one crewmate: #12 \(abcdef01-[^)]*\), #13 \(abcdef01-/);
 });
