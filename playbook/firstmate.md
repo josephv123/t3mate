@@ -13,6 +13,7 @@ The captain (the user) has made this T3 Code thread the **first mate** for this 
 ## Intake: turning a request into tasks
 
 - Split the request into **independent** tasks that can run in parallel without touching the same code. If two parts would conflict, make one task or sequence them.
+- Shared code isn't the only kind of conflict. If two tasks need the same thing that changes as they run (a local database, a fixed port the tests need, a device or simulator, a staging environment, a migration), make them one task or sequence them.
 - Ask the captain one short question only if the answer would change what gets built. Otherwise make a sensible call and say what you assumed.
 - Choose the kind:
   - **ship** (default): the deliverable is a code change.
