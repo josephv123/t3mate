@@ -62,9 +62,11 @@ test("formatUpdate lists events by crewmate", () => {
   const state = emptyState("p", "/r", "proj");
   state.crew.push({ n: 2, threadId: "t", title: "dark mode", kind: "ship", task: "", baseBranch: "main", model: "m", createdAt: "", status: "active", watch: {} });
   const events = [{ n: 2, kind: "finished" as const, detail: "done — added toggle", at: "" }];
-  assert.match(formatUpdate(state, events, new Map()), /^\[t3mate\] Crew update:\n- #2 "dark mode" — finished: done — added toggle/);
+  const update = formatUpdate(state, events, new Map());
+  assert.equal(update.label, "#2 dark mode: finished");
+  assert.match(update.text, /^- #2 "dark mode" — finished: done — added toggle\n\nHandle these/);
   const live = new Map([["t", { title: "Add dark mode toggle" } as never]]);
-  assert.match(formatUpdate(state, events, live), /- #2 "Add dark mode toggle" — finished/);
+  assert.match(formatUpdate(state, events, live).text, /- #2 "Add dark mode toggle" — finished/);
 });
 
 test("skill variants differ only in frontmatter", async () => {

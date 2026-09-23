@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { fail, newId, nowIso, run, tryRun } from "./util.ts";
+import { fail, newId, nowIso, oneLine, run, tryRun } from "./util.ts";
 
 export const T3_HOME = process.env.T3CODE_HOME ?? join(homedir(), ".t3");
 export const T3_APP = process.env.T3MATE_T3_APP ?? "/Applications/T3 Code (Alpha).app";
@@ -255,16 +255,67 @@ export async function startThread(input: StartThreadInput): Promise<string> {
   return threadId;
 }
 
-/** Post a user message into an existing thread. Steers the agent if it is mid-turn. */
+/** Detail T3 shows as a collapsed chip in the message; the agent still receives all of it. */
+export interface Collapsed {
+  label: string;
+  title: string;
+  text: string;
+}
+
+async function supportsInlineContext(): Promise<boolean> {
+  const env = await http<{ capabilities?: { inlineMessageContext?: boolean } }>("/.well-known/t3/environment");
+  return env.capabilities?.inlineMessageContext === true;
+}
+
+/**
+ * T3's composer context: a `t3-context://` link in the text marks where the chip goes, and a
+ * record carries its payload, which the server expands for the agent. The terminal kind is the
+ * one whose chip shows arbitrary text (in a popover); unknown kinds render as "unavailable".
+ */
+function withCollapsed(text: string, c: Collapsed): { text: string; context: unknown } {
+  const contextId = `t3mate-${newId()}`;
+  const label = oneLine(c.label.replace(/[[\]\\]/g, " "), 200) || "details";
+  const body = c.text.slice(0, 64_000);
+  return {
+    text: `${text} [${label}](t3-context://v1/terminal/${contextId})`,
+    context: {
+      version: 1,
+      records: [
+        {
+          version: 1,
+          kind: "terminal",
+          contextId,
+          label,
+          terminalId: "t3mate",
+          terminalLabel: oneLine(c.title, 255),
+          lineStart: 1,
+          lineEnd: body.split("\n").length,
+          text: body,
+        },
+      ],
+    },
+  };
+}
+
+/**
+ * Post a user message into an existing thread. Steers the agent if it is mid-turn.
+ * `collapsed` rides along as a chip, or as plain text on T3 builds without inline context.
+ */
 export async function sendMessage(
   thread: Pick<ShellThread, "id" | "runtimeMode" | "interactionMode">,
   text: string,
+  collapsed?: Collapsed,
 ): Promise<void> {
+  const message = !collapsed
+    ? { text }
+    : (await supportsInlineContext())
+      ? withCollapsed(text, collapsed)
+      : { text: `${text} ${collapsed.label}\n\n${collapsed.text}` };
   await dispatch({
     type: "thread.turn.start",
     commandId: newId(),
     threadId: thread.id,
-    message: { messageId: newId(), role: "user", text, attachments: [] },
+    message: { messageId: newId(), role: "user", attachments: [], ...message },
     runtimeMode: thread.runtimeMode,
     interactionMode: thread.interactionMode,
     createdAt: nowIso(),

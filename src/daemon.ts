@@ -6,7 +6,7 @@ import { parseStatus } from "./brief.ts";
 import { loadConfig } from "./config.ts";
 import type { CrewEvent, CrewMember, ProjectState } from "./state.ts";
 import { listStates, withState } from "./state.ts";
-import type { ShellThread } from "./t3.ts";
+import type { Collapsed, ShellThread } from "./t3.ts";
 import { getShell, getThread, isBusy, lastAssistantText, sendMessage } from "./t3.ts";
 import { T3MATE_HOME, nowIso, oneLine, sleep } from "./util.ts";
 
@@ -63,19 +63,24 @@ async function crewEvents(c: CrewMember, t: ShellThread | undefined, stallMinute
   return events;
 }
 
-/** Crewmates are named by their live T3 thread title — what the captain sees in the sidebar. */
-export function formatUpdate(state: ProjectState, events: CrewEvent[], threads: Map<string, ShellThread>): string {
+/**
+ * One short line for the captain (a chip in T3); the details and instructions inside it are for
+ * the first mate. Crewmates are named by their live T3 thread title — what the captain sees in the sidebar.
+ */
+export function formatUpdate(state: ProjectState, events: CrewEvent[], threads: Map<string, ShellThread>): Collapsed {
   const title = (n: number) => {
     const c = state.crew.find((c) => c.n === n);
     return oneLine((c && threads.get(c.threadId)?.title) ?? c?.title ?? "?", 60);
   };
-  const lines = events.map((e) => `- #${e.n} "${title(e.n)}" — ${e.kind}: ${e.detail}`);
-  return [
-    `[t3mate] Crew update:`,
-    ...lines,
-    "",
-    "Handle these per the first-mate playbook (`t3mate peek|diff <n>`; `t3mate brief` if you've lost context), then give the captain a short update.",
-  ].join("\n");
+  return {
+    label: events.map((e) => `#${e.n} ${title(e.n)}: ${e.kind}`).join(" · "),
+    title: "t3mate crew update",
+    text: [
+      ...events.map((e) => `- #${e.n} "${title(e.n)}" — ${e.kind}: ${e.detail}`),
+      "",
+      "Handle these per the first-mate playbook (`t3mate peek|diff <n>`; `t3mate brief` if you've lost context), then give the captain a short update.",
+    ].join("\n"),
+  };
 }
 
 async function tickProject(projectId: string, threads: Map<string, ShellThread>): Promise<void> {
@@ -101,7 +106,7 @@ async function tickProject(projectId: string, threads: Map<string, ShellThread>)
       if (isBusy(fm) || fm.hasPendingApprovals || fm.hasPendingUserInput) return;
 
       try {
-        await sendMessage(fm, formatUpdate(state, state.pending, threads));
+        await sendMessage(fm, "[t3mate] Crew update:", formatUpdate(state, state.pending, threads));
         log(`${state.title}: delivered ${state.pending.length} event(s) to first mate`);
         state.pending = [];
         delete state.lastDeliveryError;
