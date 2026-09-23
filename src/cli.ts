@@ -1,15 +1,28 @@
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { crewBrief, crewState, crewTable, firstMateBrief, parseStatus } from "./brief.ts";
 import type { Config } from "./config.ts";
 import { loadConfig, resolveModel } from "./config.ts";
 import { daemonPid, runDaemon, tick } from "./daemon.ts";
 import { forkPoint, localHead, originHead, resolveSpawnBase } from "./git.ts";
 import { DAEMON_LOG, daemonInstall, daemonRestart, daemonUninstall, doctor, install, uninstall } from "./install.ts";
+import { stopWorktreeProcesses } from "./procs.ts";
 import { currentBranch, resolveProject } from "./project.ts";
 import type { CrewMember, ProjectState } from "./state.ts";
 import { broadcastTargets, emptyState, findCrew, readState, withState } from "./state.ts";
 import type { Project, Shell, ShellThread } from "./t3.ts";
-import { archiveThread, getShell, getThread, interruptThread, isBusy, lastAssistantText, sendMessage, startThread } from "./t3.ts";
+import {
+  archiveThread,
+  getShell,
+  getThread,
+  hasLiveSession,
+  interruptThread,
+  isBusy,
+  lastAssistantText,
+  sendMessage,
+  startThread,
+  stopSession,
+} from "./t3.ts";
 import { UserError, fail, nowIso, oneLine, plural, readStdin, run, sleep, tail } from "./util.ts";
 
 const HELP = `t3mate — a first mate for T3 Code
@@ -28,7 +41,8 @@ First mate (that thread) uses:
   broadcast [opts] "<message>"       send to every active crewmate (running or idle)
       --running  only running ones    --except 3,5  skip some    --dry-run  just list who'd get it
   stop <n>                           interrupt a crewmate's running turn
-  archive <n>...                     retire crewmates (archives their T3 threads)
+  archive <n>... [--keep-processes]  retire crewmates: archive their T3 threads, stop their
+                                     sessions and any processes still running from their worktrees
       <n> is the crew number (3 or #3) or the crewmate's T3 thread id
   backlog add "<text>" | list | done <n> | rm <n>
 
@@ -314,12 +328,48 @@ async function cmdStop(args: Args): Promise<void> {
   console.log(`Interrupted #${c.n}.`);
 }
 
+/** Wait (briefly) for T3 to report the thread's session stopped. */
+async function sessionStopped(threadId: string): Promise<void> {
+  for (let i = 0; i < 20; i++) {
+    const t = await getThread(threadId).catch(() => undefined);
+    if (!t || !hasLiveSession(t)) return;
+    await sleep(250);
+  }
+}
+
+/** Stop what's still running from a retired crewmate's worktree, and say what was stopped. */
+async function cleanUpWorktree(ctx: Ctx, t: ShellThread): Promise<void> {
+  const wt = t.worktreePath;
+  if (!wt) return; // worked in the main checkout: nothing there is the crewmate's alone
+  // Paranoia: never treat the main checkout, a directory containing it, or home as the worktree.
+  const root = ctx.project.workspaceRoot;
+  const contains = (dir: string) => dir === wt || dir.startsWith(`${wt}/`);
+  if (contains(root) || contains(homedir()) || wt.split("/").filter(Boolean).length < 3) {
+    console.log(`  not stopping processes: worktree ${wt} isn't a crewmate's own directory`);
+    return;
+  }
+  const sharing = ctx.shell.threads.filter((o) => o.id !== t.id && !o.archivedAt && o.worktreePath === wt);
+  if (sharing.length) {
+    console.log(`  not stopping processes: ${wt} is still used by ${plural(sharing.length, "other T3 thread")}`);
+    return;
+  }
+  const { stopped, killed, spared } = await stopWorktreeProcesses(wt);
+  const line = (p: { pid: number; command: string }) => `    ${p.pid}  ${oneLine(p.command, 120)}${killed.includes(p.pid) ? "  (SIGKILL)" : ""}`;
+  if (stopped.length) console.log(`  stopped ${plural(stopped.length, "process")} running from its worktree:\n${stopped.map(line).join("\n")}`);
+  if (spared.length) console.log(`  left ${plural(spared.length, "terminal shell")} open in its worktree:\n${spared.map(line).join("\n")}`);
+}
+
 async function cmdArchive(args: Args): Promise<void> {
   const ctx = await context();
   if (!args.positional.length) fail("Which crewmates? e.g. `t3mate archive 3 4`.");
+  const keepProcesses = args.flags["keep-processes"] === true;
   for (const ref of args.positional) {
     const c = crewOrFail(ctx.state, ref);
-    const t = ctx.thread(c.threadId);
+    // The shell snapshot leaves out archived threads; one archived from T3 still has a worktree to clean up.
+    const t = ctx.thread(c.threadId) ?? (await getThread(c.threadId).catch(() => undefined));
+    // T3's archive leaves the agent's session running; stop it the way T3 does before a delete.
+    const stopping = !keepProcesses && t !== undefined && hasLiveSession(t);
+    if (stopping) await stopSession(c.threadId).catch((error: Error) => console.error(`  couldn't stop #${c.n}'s T3 session: ${error.message}`));
     if (t && !t.archivedAt) await archiveThread(c.threadId);
     await withState(ctx.project.id, ctx.init, (s) => {
       const m = findCrew(s, String(c.n));
@@ -327,6 +377,10 @@ async function cmdArchive(args: Args): Promise<void> {
       s.pending = s.pending.filter((e) => e.n !== c.n);
     });
     console.log(`Archived #${c.n} "${t?.title ?? c.title}"`);
+    if (!keepProcesses && t) {
+      if (stopping) await sessionStopped(c.threadId);
+      await cleanUpWorktree(ctx, t);
+    }
   }
 }
 

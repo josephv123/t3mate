@@ -109,6 +109,7 @@ Model specs are `instance:model`, with options as a query string (`codex:gpt-5.4
 See `t3mate help`. The first mate uses `brief`, `spawn`, `list`, `peek`, `diff`, `send`, `broadcast`, `stop`, `archive` and `backlog`. You'll mostly use `install`, `doctor`, `daemon logs` and `config`.
 
 - `broadcast "<message>"` sends the same `[first mate]` message as `send` to every active crewmate, running or idle. `--running` limits it to running ones, `--except 3,5` skips some, and `--dry-run` only lists who would get it.
+- `archive <n>` also stops the crewmate's T3 session and any processes still running from its worktree (a server it left up for you, say): SIGTERM, then SIGKILL after a few seconds. It lists what it stopped. It only touches processes whose working directory is inside that crewmate's own worktree, and it leaves terminal shells open there alone. `--keep-processes` skips all of this.
 
 ## Layout
 
@@ -118,6 +119,7 @@ src/t3.ts           T3 adapter: HTTP + websocket RPC, token, T3 CLI
 src/cli.ts          commands
 src/daemon.ts       supervision loop: crew events, stalls, base-move notices
 src/git.ts          base branch: where worktrees start, what moved on origin
+src/procs.ts        stopping processes left running in a crewmate's worktree
 src/brief.ts        playbook/brief rendering, crew table, status-line parsing
 src/config.ts       layered TOML config + model resolution
 src/state.ts        per-project state with a file lock

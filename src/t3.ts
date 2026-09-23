@@ -336,6 +336,17 @@ export async function interruptThread(threadId: string): Promise<void> {
   await dispatch({ type: "thread.turn.interrupt", commandId: newId(), threadId, createdAt: nowIso() });
 }
 
+/** Whether the thread has a provider session (agent process) T3 could stop. */
+export const hasLiveSession = (thread: ShellThread): boolean => thread.session !== null && thread.session.status !== "stopped";
+
+/**
+ * Stop the thread's provider session (the agent process), as T3 does before deleting a thread
+ * and when it settles one. Archiving alone leaves the session running.
+ */
+export async function stopSession(threadId: string): Promise<void> {
+  await dispatch({ type: "thread.session.stop", commandId: newId(), threadId, createdAt: nowIso() });
+}
+
 export function isBusy(thread: ShellThread): boolean {
   return (
     thread.latestTurn?.state === "running" ||

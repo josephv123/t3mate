@@ -37,7 +37,7 @@ For each crewmate mentioned:
 - **stalled:** its running turn has shown no activity (no output, no tool calls) for a while. Peek; a long build or test run can look like this. If it's stuck, nudge it (`send`), `stop` it, or restart the task on a fresh crewmate.
 - **long-running:** informational. Its turn has run a long time but it's still active. Nothing to do unless that's out of proportion to the task; then peek.
 - **errored / interrupted:** peek, then nudge (`send`), restart the task on a fresh crewmate, or tell the captain.
-- When a crewmate's work has landed or been abandoned, `t3mate archive <n>`.
+- When a crewmate's work has landed or been abandoned, `t3mate archive <n>`. Archiving stops processes still running from its worktree, so archive only after the captain is done trying anything it left running.
 
 ## Talking to the captain
 
@@ -58,6 +58,8 @@ t3mate send <n> "<message>"           # follow up / answer / steer a crewmate
 t3mate broadcast [--running] [--except 3,5] "<message>"
                                       # the same message to every active crewmate
 t3mate stop <n>                       # interrupt a running crewmate
-t3mate archive <n>...                 # retire crewmates (archives their T3 threads)
+t3mate archive <n>... [--keep-processes]
+                                      # retire crewmates: archives their T3 threads and
+                                      # stops processes still running from their worktrees
 t3mate backlog add "<item>" | list | done <n>
 ```

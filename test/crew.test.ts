@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { spawn, execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -18,6 +18,7 @@ for (const who of ["AUTHOR", "COMMITTER"]) {
 const { DEFAULTS, loadConfig } = await import("../src/config.ts");
 const { baseMoveAction, coalesceEvents, detectLongRunning, detectStall, duration, isOutdated } = await import("../src/daemon.ts");
 const { baseMoveMessage, compareWithOrigin, forkPoint, newCommits, pickSpawnBase, resolveSpawnBase } = await import("../src/git.ts");
+const procs = await import("../src/procs.ts");
 const { broadcastTargets, emptyState } = await import("../src/state.ts");
 type ShellThread = import("../src/t3.ts").ShellThread;
 type CrewEvent = import("../src/state.ts").CrewEvent;
@@ -278,4 +279,62 @@ test("newCommits lists what landed on origin/<base> since a commit", () => {
   assert.equal(log.total, 2);
   assert.deepEqual(log.lines.map((l) => l.replace(/^\w+ /, "")), ["PR two (#2)", "PR one (#1)"]);
   assert.equal(newCommits(project, "0000000000000000000000000000000000000000", head), null);
+});
+
+// ---------------------------------------------------------------- leftover processes
+
+test("process selection: only processes inside the worktree, never protected ones or terminal shells", () => {
+  const wt = "/Users/x/.t3/worktrees/proj/t3code-abc";
+  assert.equal(procs.isInside(wt, wt), true);
+  assert.equal(procs.isInside(`${wt}/web`, wt), true);
+  assert.equal(procs.isInside(`${wt}d`, wt), false, "a sibling sharing the prefix");
+  assert.equal(procs.isInside("/Users/x/.t3/worktrees/proj", wt), false);
+
+  const p = (pid: number, cwd: string, command = "node server.js", tty: string | null = null, ppid = 1) => ({ pid, ppid, tty, command, cwd });
+  const list = [
+    p(10, wt),
+    p(11, `${wt}/packages/web`, "npm start"),
+    p(12, `${wt}-other`),
+    p(13, "/Users/x/proj"),
+    p(14, wt, "-zsh", "ttys003"),
+    p(15, wt, "/bin/zsh -c npm run dev", "ttys004"),
+    p(16, wt, "node t3mate archive"),
+    p(1, wt, "/sbin/launchd"),
+  ];
+  const { stop, spared } = procs.selectWorktreeProcesses(list, [wt], new Set([16]));
+  assert.deepEqual(stop.map((x) => x.pid), [10, 11, 15]);
+  assert.deepEqual(spared.map((x) => x.pid), [14]);
+});
+
+test("process listing parsers and lineage", () => {
+  const lsof = "p101\nfcwd\nn/tmp/wt\np102\nfcwd\nn/tmp/wt dir/with space\n";
+  assert.deepEqual([...procs.parseLsofCwd(lsof)], [[101, "/tmp/wt"], [102, "/tmp/wt dir/with space"]]);
+  const ps = "    1     0 ??       /sbin/launchd\n  500     1 ttys001  -zsh\n  600   500 ttys001  node t3mate archive 3\n  700     1 ?        node server.js --port 0\n";
+  const table = procs.parsePs(ps);
+  assert.deepEqual(table.get(500), { pid: 500, ppid: 1, tty: "ttys001", command: "-zsh" });
+  assert.equal(table.get(700)?.tty, null);
+  assert.deepEqual([...procs.lineage(table, 600)], [600, 500, 1]);
+  assert.equal(procs.isTerminalShell({ tty: "ttys001", command: "-zsh" }), true);
+  assert.equal(procs.isTerminalShell({ tty: null, command: "/bin/zsh" }), false);
+});
+
+test("stopWorktreeProcesses stops a process running from the worktree and nothing else", async () => {
+  const wt = realpathSync(mkdtempSync(join(tmpdir(), "t3mate-wt-")));
+  const outside = realpathSync(mkdtempSync(join(tmpdir(), "t3mate-out-")));
+  mkdirSync(join(wt, "server"));
+  const inside = spawn("sleep", ["60"], { cwd: join(wt, "server"), stdio: "ignore" });
+  const bystander = spawn("sleep", ["60"], { cwd: outside, stdio: "ignore" });
+  const exited = (child: typeof inside) => new Promise<NodeJS.Signals | null>((r) => child.on("exit", (_code, signal) => r(signal)));
+  const insideExit = exited(inside);
+  try {
+    await new Promise((r) => setTimeout(r, 200));
+    const result = await procs.stopWorktreeProcesses(wt, 2000);
+    assert.deepEqual(result.stopped.map((p) => p.pid), [inside.pid]);
+    assert.equal(await insideExit, "SIGTERM");
+    assert.equal(bystander.exitCode, null);
+    assert.equal(bystander.signalCode, null);
+  } finally {
+    inside.kill("SIGKILL");
+    bystander.kill("SIGKILL");
+  }
 });
