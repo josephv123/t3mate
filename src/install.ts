@@ -62,7 +62,7 @@ const CONFIG_TEMPLATE = `# t3mate global config. Layers (later wins):
 # runtime_mode = "full-access"   # unset: same as the first mate thread
 # base_branch = "main"           # unset: the project's current branch
 # worktree = true                # each crewmate gets its own T3 worktree
-# start_from_origin = false
+# start_from_origin = "auto"     # auto: origin/<base> when the local base is only behind it; true/false to force
 # run_setup_script = true        # run the T3 project's worktree setup script
 
 [models]

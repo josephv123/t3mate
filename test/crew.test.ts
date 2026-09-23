@@ -1,13 +1,23 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-// Config and state paths are resolved from T3MATE_HOME at import time.
-process.env.T3MATE_HOME = mkdtempSync(join(tmpdir(), "t3mate-test-"));
-const { DEFAULTS } = await import("../src/config.ts");
+// Config and state paths are resolved from T3MATE_HOME at import time; git must ignore the
+// user's own config (signing, hooks, default branch).
+const home = mkdtempSync(join(tmpdir(), "t3mate-test-"));
+process.env.T3MATE_HOME = home;
+process.env.GIT_CONFIG_GLOBAL = "/dev/null";
+process.env.GIT_CONFIG_NOSYSTEM = "1";
+for (const who of ["AUTHOR", "COMMITTER"]) {
+  process.env[`GIT_${who}_NAME`] = "t3mate test";
+  process.env[`GIT_${who}_EMAIL`] = "test@t3mate.invalid";
+}
+const { DEFAULTS, loadConfig } = await import("../src/config.ts");
 const { coalesceEvents, detectLongRunning, detectStall, duration, isOutdated } = await import("../src/daemon.ts");
+const { compareWithOrigin, forkPoint, pickSpawnBase, resolveSpawnBase } = await import("../src/git.ts");
 const { broadcastTargets, emptyState } = await import("../src/state.ts");
 type ShellThread = import("../src/t3.ts").ShellThread;
 type CrewEvent = import("../src/state.ts").CrewEvent;
@@ -147,4 +157,81 @@ test("broadcast targets: live crew, optionally only running, minus exclusions", 
   assert.deepEqual(ns({ runningOnly: true }), [1, 6]);
   assert.deepEqual(ns({ except: [1, 2] }), [6]);
   assert.deepEqual(ns({ runningOnly: true, except: [6] }), [1]);
+});
+
+// ---------------------------------------------------------------- base branch
+
+test("spawn base: auto starts from origin only when the local base is strictly behind", () => {
+  assert.deepEqual(pickSpawnBase("main", "auto", { ahead: 0, behind: 3 }), {
+    fromOrigin: true,
+    note: "note: local main is 3 commits behind origin/main; starting from origin/main.",
+  });
+  assert.deepEqual(pickSpawnBase("main", "auto", { ahead: 2, behind: 0 }), {
+    fromOrigin: false,
+    note: "warning: local main has 2 commits not on origin/main; starting from local main.",
+  });
+  assert.deepEqual(pickSpawnBase("main", "auto", { ahead: 1, behind: 4 }), {
+    fromOrigin: false,
+    note: "warning: local main has 1 commit not on origin/main and is 4 behind it; starting from local main.",
+  });
+  assert.deepEqual(pickSpawnBase("main", "auto", { ahead: 0, behind: 0 }), { fromOrigin: false });
+  assert.deepEqual(pickSpawnBase("main", "auto", null), { fromOrigin: false });
+  // Explicit settings win either way.
+  assert.deepEqual(pickSpawnBase("main", true, { ahead: 2, behind: 0 }), { fromOrigin: true });
+  assert.deepEqual(pickSpawnBase("main", false, { ahead: 0, behind: 3 }), { fromOrigin: false });
+});
+
+test("config: start_from_origin defaults to auto and rejects anything but true, false or auto", () => {
+  assert.equal(DEFAULTS.crew.start_from_origin, "auto");
+  const root = mkdtempSync(join(tmpdir(), "t3mate-proj-"));
+  writeFileSync(join(root, ".t3mate.toml"), `[crew]\nstart_from_origin = "sometimes"\n`);
+  assert.throws(() => loadConfig(root), /start_from_origin must be true, false or "auto"/);
+  writeFileSync(join(root, ".t3mate.toml"), `[crew]\nstart_from_origin = false\n`);
+  assert.equal(loadConfig(root).crew.start_from_origin, false);
+});
+
+// Real repos: an "origin" bare repo, the project checkout, and a second clone standing in for merged PRs.
+const git = (cwd: string, ...args: string[]): string => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+function repos() {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "t3mate-git-")));
+  const origin = join(dir, "origin.git");
+  git(dir, "init", "--bare", "-b", "main", origin);
+  const project = join(dir, "project");
+  git(dir, "clone", "-q", origin, project);
+  git(project, "commit", "-q", "--allow-empty", "-m", "initial");
+  git(project, "push", "-q", "origin", "main");
+  const other = join(dir, "other");
+  git(dir, "clone", "-q", origin, other);
+  const land = (...subjects: string[]) => {
+    for (const s of subjects) git(other, "commit", "-q", "--allow-empty", "-m", s);
+    git(other, "push", "-q", "origin", "main");
+  };
+  return { dir, project, land };
+}
+
+test("spawn base against real repos: fetches, then picks origin only for a stale local base", () => {
+  const { project, land } = repos();
+  assert.deepEqual(resolveSpawnBase(project, "main", "auto"), { fromOrigin: false }, "in sync");
+  land("PR one (#1)", "PR two (#2)");
+  assert.equal(compareWithOrigin(project, "main")?.behind, 0, "not fetched yet");
+  assert.deepEqual(resolveSpawnBase(project, "main", "auto"), {
+    fromOrigin: true,
+    note: "note: local main is 2 commits behind origin/main; starting from origin/main.",
+  });
+  assert.equal(existsSync(join(project, ".git", "FETCH_HEAD")), false, "can't disturb a concurrent git pull");
+  git(project, "commit", "-q", "--allow-empty", "-m", "local only");
+  assert.match(resolveSpawnBase(project, "main", "auto").note ?? "", /^warning: local main has 1 commit not on origin\/main and is 2 behind it/);
+  assert.deepEqual(resolveSpawnBase(project, "main", false), { fromOrigin: false });
+  assert.deepEqual(resolveSpawnBase(project, "no-such-branch", "auto"), { fromOrigin: false }, "never pushed: quiet");
+});
+
+test("forkPoint: a crewmate branched from origin/<base> forks there, not at a stale local base", () => {
+  const { project, land } = repos();
+  land("PR one (#1)", "PR two (#2)");
+  git(project, "fetch", "-q", "origin");
+  const head = git(project, "rev-parse", "origin/main");
+  // Local main is 2 behind; the crewmate's diff must not include the landed PRs.
+  git(project, "checkout", "-q", "-b", "crew", "origin/main");
+  git(project, "commit", "-q", "--allow-empty", "-m", "crew work");
+  assert.equal(forkPoint(project, "main"), head);
 });

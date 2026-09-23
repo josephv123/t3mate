@@ -69,6 +69,7 @@ These layers apply in order, with later ones winning. `[instructions]` text accu
 model = "codex:gpt-5.4"          # unset: same model as the first mate thread
 runtime_mode = "full-access"     # unset: same as the first mate thread
 base_branch = "main"             # unset: project's current branch
+start_from_origin = "auto"       # where worktrees branch from (below); true / false to force
 worktree = true
 
 [models]                          # aliases for spawn --model
@@ -87,6 +88,8 @@ batch_seconds = 8
 ```
 
 `t3mate config` prints the effective config for the current project.
+
+**Where crewmates start.** With `start_from_origin = "auto"` (the default), `spawn` fetches origin first. If the local base branch is only behind `origin/<base>` (you merged PRs on GitHub and haven't pulled), the crewmate starts from `origin/<base>`. If the local base has commits that aren't on origin, it starts from the local base and `spawn` prints a one-line warning. `true` always starts from `origin/<base>`, and `false` always from the local branch without fetching.
 
 Model specs are `instance:model`, with options as a query string (`codex:gpt-5.4?reasoningEffort=high`). They're also accepted in `--model`.
 
@@ -111,6 +114,7 @@ bin/t3mate          shell entry (resolves symlinks, runs src/cli.ts)
 src/t3.ts           T3 adapter: HTTP + websocket RPC, token, T3 CLI
 src/cli.ts          commands
 src/daemon.ts       supervision loop
+src/git.ts          base branch: where new worktrees start
 src/brief.ts        playbook/brief rendering, crew table, status-line parsing
 src/config.ts       layered TOML config + model resolution
 src/state.ts        per-project state with a file lock

@@ -15,17 +15,25 @@ export function fail(message: string): never {
 export const nowIso = (): string => new Date().toISOString();
 export const newId = (): string => crypto.randomUUID();
 
-export function run(cmd: string, args: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {}): string {
+export interface RunOptions {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  /** Kill the command after this many milliseconds. */
+  timeout?: number;
+}
+
+export function run(cmd: string, args: string[], opts: RunOptions = {}): string {
   return execFileSync(cmd, args, {
     cwd: opts.cwd,
     env: opts.env,
+    timeout: opts.timeout,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     maxBuffer: 64 * 1024 * 1024,
   }).trimEnd();
 }
 
-export function tryRun(cmd: string, args: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {}): string | null {
+export function tryRun(cmd: string, args: string[], opts: RunOptions = {}): string | null {
   try {
     return run(cmd, args, opts);
   } catch {

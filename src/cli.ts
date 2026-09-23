@@ -3,13 +3,14 @@ import { crewBrief, crewState, crewTable, firstMateBrief, parseStatus } from "./
 import type { Config } from "./config.ts";
 import { loadConfig, resolveModel } from "./config.ts";
 import { daemonPid, runDaemon, tick } from "./daemon.ts";
+import { forkPoint, resolveSpawnBase } from "./git.ts";
 import { DAEMON_LOG, daemonInstall, daemonRestart, daemonUninstall, doctor, install, uninstall } from "./install.ts";
 import { currentBranch, resolveProject } from "./project.ts";
 import type { CrewMember, ProjectState } from "./state.ts";
 import { broadcastTargets, emptyState, findCrew, readState, withState } from "./state.ts";
 import type { Project, Shell, ShellThread } from "./t3.ts";
 import { archiveThread, getShell, getThread, interruptThread, isBusy, lastAssistantText, sendMessage, startThread } from "./t3.ts";
-import { UserError, fail, nowIso, oneLine, plural, readStdin, run, sleep, tail, tryRun } from "./util.ts";
+import { UserError, fail, nowIso, oneLine, plural, readStdin, run, sleep, tail } from "./util.ts";
 
 const HELP = `t3mate — a first mate for T3 Code
 
@@ -175,6 +176,9 @@ async function cmdSpawn(args: Args): Promise<void> {
     worktree = false;
   }
   const title = str(args.flags.title) ?? oneLine(task.split("\n").find((l) => l.trim()) ?? task, 60);
+  const root = ctx.project.workspaceRoot;
+  const start = worktree && baseBranch ? resolveSpawnBase(root, baseBranch, ctx.config.crew.start_from_origin) : { fromOrigin: false };
+  if (start.note) console.error(start.note);
 
   const n = await withState(ctx.project.id, ctx.init, (s) => s.nextCrew++);
   const threadId = await startThread({
@@ -187,7 +191,7 @@ async function cmdSpawn(args: Args): Promise<void> {
     interactionMode: ctx.config.crew.interaction_mode,
     baseBranch,
     worktree,
-    startFromOrigin: ctx.config.crew.start_from_origin,
+    startFromOrigin: start.fromOrigin,
     runSetupScript: ctx.config.crew.run_setup_script,
   });
   await withState(ctx.project.id, ctx.init, (s) => {
@@ -207,7 +211,7 @@ async function cmdSpawn(args: Args): Promise<void> {
   console.log(
     `Spawned #${n} (${kind}) "${title}" → T3 thread ${threadId}\n` +
       `  model ${modelSelection.instanceId}:${modelSelection.model}, ${runtimeMode}, ` +
-      (worktree ? `new T3 worktree from ${baseBranch}` : "main checkout"),
+      (worktree ? `new T3 worktree from ${start.fromOrigin ? `origin/${baseBranch}` : baseBranch}` : "main checkout"),
   );
 }
 
@@ -245,7 +249,8 @@ async function cmdDiff(args: Args): Promise<void> {
   const cwd = t?.worktreePath ?? ctx.project.workspaceRoot;
   if (!existsSync(cwd)) fail(`Worktree ${cwd} no longer exists.`);
   if (!t?.worktreePath) console.error("note: this crewmate works in the main checkout; showing all uncommitted changes there.");
-  const base = c.baseBranch ? tryRun("git", ["merge-base", c.baseBranch, "HEAD"], { cwd }) : null;
+  // The crewmate may have started from, or rebased onto, origin/<base> rather than the local base.
+  const base = c.baseBranch ? forkPoint(cwd, c.baseBranch) : null;
   const out: string[] = [];
   if (base) {
     const log = run("git", ["log", "--oneline", `${base}..HEAD`], { cwd });

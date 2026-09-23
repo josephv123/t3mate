@@ -6,6 +6,8 @@ import { parse } from "smol-toml";
 import type { InteractionMode, ModelSelection, RuntimeMode } from "./t3.ts";
 import { T3MATE_HOME, fail } from "./util.ts";
 
+export type StartFromOrigin = boolean | "auto";
+
 export interface Config {
   crew: {
     /** Model spec or alias for crewmates. Unset: same model as the first mate's thread. */
@@ -17,7 +19,12 @@ export interface Config {
     worktree: boolean;
     /** Unset: the project's currently checked-out branch. */
     base_branch?: string;
-    start_from_origin: boolean;
+    /**
+     * Where new worktrees branch from. "auto": fetch origin, and start from origin/<base> when the
+     * local base is only behind it (no local-only commits); otherwise from the local base.
+     * true/false force origin/<base> or the local base.
+     */
+    start_from_origin: StartFromOrigin;
     run_setup_script: boolean;
   };
   /** Aliases usable anywhere a model spec is accepted: "instance:model" or a table. */
@@ -43,7 +50,7 @@ export const DEFAULTS: Config = {
   crew: {
     interaction_mode: "default",
     worktree: true,
-    start_from_origin: false,
+    start_from_origin: "auto",
     run_setup_script: true,
   },
   models: {},
@@ -91,6 +98,10 @@ export function loadConfig(projectRoot?: string): Config {
       .map((layer) => (isTable(layer.instructions) ? layer.instructions[key] : undefined))
       .filter((v): v is string => typeof v === "string" && v.trim() !== "")
       .join("\n\n");
+  }
+  const origin = config.crew.start_from_origin as unknown;
+  if (origin !== true && origin !== false && origin !== "auto") {
+    fail(`crew.start_from_origin must be true, false or "auto" (got ${JSON.stringify(origin)}).`);
   }
   return config;
 }
