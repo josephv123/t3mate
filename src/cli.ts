@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { relative, isAbsolute, sep } from "node:path";
 import { crewBrief, crewState, crewTable, firstMateBrief, parseStatus } from "./brief.ts";
 import type { Config } from "./config.ts";
 import { loadConfig, resolveModel } from "./config.ts";
@@ -47,7 +48,7 @@ First mate (that thread) uses:
   backlog add "<text>" | list | done <n> | rm <n>
 
 Setup:
-  install [--rotate-token] [--no-daemon]   link CLI + skills, T3 token, launchd daemon
+  install [--rotate-token] [--no-daemon]   install CLI + skills, T3 token, daemon
   uninstall                                undo install (keeps ~/.t3mate)
   doctor                                   check everything
   daemon run|tick|install|uninstall|restart|status|logs
@@ -343,8 +344,8 @@ async function cleanUpWorktree(ctx: Ctx, t: ShellThread): Promise<void> {
   if (!wt) return; // worked in the main checkout: nothing there is the crewmate's alone
   // Paranoia: never treat the main checkout, a directory containing it, or home as the worktree.
   const root = ctx.project.workspaceRoot;
-  const contains = (dir: string) => dir === wt || dir.startsWith(`${wt}/`);
-  if (contains(root) || contains(homedir()) || wt.split("/").filter(Boolean).length < 3) {
+  const contains = (dir: string) => { const rel = relative(wt, dir); return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)); };
+  if (contains(root) || contains(homedir()) || !isAbsolute(wt) || wt.split(sep).filter(Boolean).length < 3) {
     console.log(`  not stopping processes: worktree ${wt} isn't a crewmate's own directory`);
     return;
   }
@@ -422,7 +423,7 @@ async function cmdDaemon(args: Args): Promise<void> {
   else if (sub === "install") console.log(await daemonInstall());
   else if (sub === "uninstall") console.log(daemonUninstall());
   else if (sub === "restart") console.log(daemonRestart());
-  else if (sub === "logs") console.log(existsSync(DAEMON_LOG) ? run("tail", ["-n", "60", DAEMON_LOG]) : "(no log yet)");
+  else if (sub === "logs") console.log(existsSync(DAEMON_LOG) ? readFileSync(DAEMON_LOG, "utf8").trimEnd().split(/\r?\n/).slice(-60).join("\n") : "(no log yet)");
   else if (sub === "status") {
     const pid = daemonPid();
     console.log(pid ? `running (pid ${pid})` : "not running — `t3mate daemon install`");

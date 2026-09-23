@@ -1,13 +1,15 @@
-import { existsSync, lstatSync, mkdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { globalConfigPath } from "./config.ts";
 import { daemonPid } from "./daemon.ts";
-import { T3_APP, TOKEN_LABEL, getShell, issueToken, origin, readToken, storeToken, t3cli } from "./t3.ts";
+import { T3_APP, TOKEN_LABEL, deleteToken, getShell, issueToken, origin, readToken, storeToken, t3cli } from "./t3.ts";
 import { REPO_ROOT, T3MATE_HOME, run, sleep, tryRun } from "./util.ts";
 
 const HOME = homedir();
-const BIN_LINK = join(HOME, ".local", "bin", "t3mate");
+const WINDOWS = process.platform === "win32";
+const BIN_DIR = join(HOME, ".local", "bin");
+const BIN_LINK = join(BIN_DIR, WINDOWS ? "t3mate.cmd" : "t3mate");
 const LAUNCHD_LABEL = "com.t3mate.daemon";
 const PLIST = join(HOME, "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
 export const DAEMON_LOG = join(T3MATE_HOME, "daemon.log");
@@ -33,17 +35,35 @@ function link(target: string, path: string): string {
   } catch {
     // absent
   }
-  if (existing === target) return `ok       ${path}`;
+  let sameTarget = existing === target;
+  if (!sameTarget && existing !== null && existing !== "(not a symlink)" && existsSync(target)) {
+    try { sameTarget = realpathSync(path) === realpathSync(target); } catch { /* dangling link */ }
+  }
+  if (sameTarget) return `ok       ${path}`;
   if (existing === "(not a symlink)") return `SKIPPED  ${path} exists and is not a symlink; remove it to let t3mate manage it`;
   if (existing !== null) rmSync(path);
-  symlinkSync(target, path);
+  symlinkSync(target, path, WINDOWS ? "junction" : undefined);
   return `linked   ${path} -> ${target}`;
+}
+
+function installBin(): string {
+  if (!WINDOWS) return link(join(REPO_ROOT, "bin", "t3mate"), BIN_LINK);
+  const content = `@echo off\r\n@rem managed by t3mate\r\n"${process.execPath}" --disable-warning=ExperimentalWarning "${join(REPO_ROOT, "src", "cli.ts")}" %*\r\n`;
+  if (existsSync(BIN_LINK)) {
+    const existing = readFileSync(BIN_LINK, "utf8");
+    if (existing === content) return `ok       ${BIN_LINK}`;
+    if (!existing.includes("@rem managed by t3mate")) return `SKIPPED  ${BIN_LINK} exists and is not managed by t3mate`;
+  }
+  writeFileSync(BIN_LINK, content);
+  return `wrote    ${BIN_LINK}`;
 }
 
 /** Remove a symlink only if it points into this repo. */
 function unlinkOwned(path: string): string | null {
   try {
-    if (lstatSync(path).isSymbolicLink() && readlinkSync(path).startsWith(REPO_ROOT)) {
+    const target = realpathSync(path);
+    const rel = relative(REPO_ROOT, target);
+    if (lstatSync(path).isSymbolicLink() && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)) {
       rmSync(path);
       return `removed  ${path}`;
     }
@@ -112,7 +132,28 @@ const uid = (): string => String(process.getuid?.() ?? run("id", ["-u"]));
 
 const loaded = (): boolean => tryRun("launchctl", ["print", `gui/${uid()}/${LAUNCHD_LABEL}`]) !== null;
 
+const TASK_NAME = "t3mate daemon";
+const TASK_XML = join(T3MATE_HOME, "daemon-task.xml");
+const xml = (value: string): string => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;");
+
+function windowsTask(): string {
+  return `<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>${xml(run("whoami", []))}</UserId></LogonTrigger></Triggers>
+  <Principals><Principal id="Author"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure></Settings>
+  <Actions Context="Author"><Exec><Command>${xml(process.execPath)}</Command><Arguments>${xml(`--disable-warning=ExperimentalWarning "${join(REPO_ROOT, "src", "cli.ts")}" daemon run`)}</Arguments><WorkingDirectory>${xml(REPO_ROOT)}</WorkingDirectory></Exec></Actions>
+</Task>`;
+}
+
 export async function daemonInstall(): Promise<string> {
+  if (WINDOWS) {
+    mkdirSync(T3MATE_HOME, { recursive: true });
+    writeFileSync(TASK_XML, `\uFEFF${windowsTask()}`, "utf16le");
+    run("schtasks.exe", ["/Create", "/F", "/TN", TASK_NAME, "/XML", TASK_XML]);
+    run("schtasks.exe", ["/Run", "/TN", TASK_NAME]);
+    return `daemon   Windows scheduled task ${TASK_NAME}`;
+  }
   mkdirSync(join(HOME, "Library", "LaunchAgents"), { recursive: true });
   mkdirSync(T3MATE_HOME, { recursive: true });
   // bootout returns before the job is gone; bootstrapping too early fails with EIO.
@@ -132,12 +173,23 @@ export async function daemonInstall(): Promise<string> {
 }
 
 export function daemonUninstall(): string {
+  if (WINDOWS) {
+    tryRun("schtasks.exe", ["/End", "/TN", TASK_NAME]);
+    tryRun("schtasks.exe", ["/Delete", "/F", "/TN", TASK_NAME]);
+    rmSync(TASK_XML, { force: true });
+    return `removed  scheduled task ${TASK_NAME}`;
+  }
   tryRun("launchctl", ["bootout", `gui/${uid()}/${LAUNCHD_LABEL}`]);
   rmSync(PLIST, { force: true });
   return `removed  launchd ${LAUNCHD_LABEL}`;
 }
 
 export function daemonRestart(): string {
+  if (WINDOWS) {
+    tryRun("schtasks.exe", ["/End", "/TN", TASK_NAME]);
+    run("schtasks.exe", ["/Run", "/TN", TASK_NAME]);
+    return "restarted daemon";
+  }
   run("launchctl", ["kickstart", "-k", `gui/${uid()}/${LAUNCHD_LABEL}`]);
   return "restarted daemon";
 }
@@ -166,13 +218,14 @@ function revokeOldTokens(keepNewest: boolean): void {
 export async function install(opts: { rotateToken: boolean; noDaemon: boolean }): Promise<string[]> {
   const out: string[] = [];
   if (!existsSync(join(REPO_ROOT, "node_modules", "smol-toml"))) {
-    run("npm", ["install", "--omit=dev", "--no-audit", "--no-fund"], { cwd: REPO_ROOT });
+    if (WINDOWS) run(process.execPath, [join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"), "install", "--omit=dev", "--no-audit", "--no-fund"], { cwd: REPO_ROOT });
+    else run("npm", ["install", "--omit=dev", "--no-audit", "--no-fund"], { cwd: REPO_ROOT });
     out.push("deps     npm install");
   }
 
-  mkdirSync(join(HOME, ".local", "bin"), { recursive: true });
-  out.push(link(join(REPO_ROOT, "bin", "t3mate"), BIN_LINK));
-  if (!(process.env.PATH ?? "").split(delimiter).includes(join(HOME, ".local", "bin"))) {
+  mkdirSync(BIN_DIR, { recursive: true });
+  out.push(installBin());
+  if (!(process.env.PATH ?? "").split(delimiter).some((part) => part.toLowerCase() === BIN_DIR.toLowerCase())) {
     out.push(`WARNING  ~/.local/bin is not on PATH; agents won't find \`t3mate\``);
   }
 
@@ -205,7 +258,7 @@ export async function install(opts: { rotateToken: boolean; noDaemon: boolean })
   if (opts.rotateToken || !(await tokenWorks())) {
     storeToken(issueToken());
     revokeOldTokens(true);
-    out.push(`token    issued a 90-day T3 token (label "${TOKEN_LABEL}") into Keychain`);
+    out.push(`token    issued a 90-day T3 token (label "${TOKEN_LABEL}") into ${WINDOWS ? "Windows DPAPI storage" : "Keychain"}`);
   } else {
     out.push("token    ok");
   }
@@ -223,7 +276,7 @@ export function uninstall(): string[] {
     }
   }
   try {
-    if (lstatSync(BIN_LINK).isSymbolicLink()) {
+    if ((WINDOWS && readFileSync(BIN_LINK, "utf8").includes("@rem managed by t3mate")) || (!WINDOWS && lstatSync(BIN_LINK).isSymbolicLink())) {
       rmSync(BIN_LINK);
       out.push(`removed  ${BIN_LINK}`);
     }
@@ -232,7 +285,7 @@ export function uninstall(): string[] {
   }
   try {
     revokeOldTokens(false);
-    tryRun("security", ["delete-generic-password", "-s", "t3mate", "-a", "t3-token"]);
+    deleteToken();
     out.push("revoked  t3mate T3 token(s)");
   } catch (error) {
     out.push(`WARNING  could not revoke tokens: ${(error as Error).message}`);
@@ -247,8 +300,8 @@ export async function doctor(): Promise<string[]> {
   const [major, minor] = process.versions.node.split(".").map(Number) as [number, number];
   check(major > 23 || (major === 23 && minor >= 6), `node ${process.versions.node}`, "need >= 23.6 for TypeScript type stripping");
   check(existsSync(T3_APP), `T3 Code app at ${T3_APP}`, "set T3MATE_T3_APP");
-  check(await tokenWorks(), `T3 API at ${origin()} with Keychain token`, "open T3 Code, then `t3mate install --rotate-token`");
-  check(tryRun("which", ["t3mate"]) !== null, "t3mate on PATH", "run `t3mate install`; ensure ~/.local/bin is on PATH");
+  check(await tokenWorks(), `T3 API at ${origin()} with stored token`, "open T3 Code, then `t3mate install --rotate-token`");
+  check(WINDOWS ? (process.env.PATH ?? "").split(delimiter).some((part) => part.toLowerCase() === BIN_DIR.toLowerCase()) && existsSync(BIN_LINK) : tryRun("which", ["t3mate"]) !== null, "t3mate on PATH", "run `t3mate install`; ensure ~/.local/bin is on PATH");
   for (const [harnessHome, skillsDir] of SKILL_TARGETS) {
     if (existsSync(harnessHome)) check(existsSync(join(skillsDir, SKILL_NAME, "SKILL.md")), `skill in ${skillsDir}`, "run `t3mate install`");
   }

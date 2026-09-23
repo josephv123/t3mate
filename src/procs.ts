@@ -3,12 +3,14 @@
 // directory is inside that worktree.
 import { spawnSync } from "node:child_process";
 import { readdirSync, readlinkSync, realpathSync } from "node:fs";
-import { basename, sep } from "node:path";
+import { basename, join, normalize } from "node:path";
+import { fileURLToPath } from "node:url";
 import { sleep } from "./util.ts";
 
 export interface Proc {
   pid: number;
   ppid: number;
+  name?: string;
   /** Controlling terminal, or null for none. */
   tty: string | null;
   command: string;
@@ -16,8 +18,11 @@ export interface Proc {
 }
 
 export function isInside(path: string, dir: string): boolean {
-  const d = dir.length > 1 && dir.endsWith(sep) ? dir.slice(0, -1) : dir;
-  return path === d || path.startsWith(d + sep);
+  const normalizedPath = normalize(path).replaceAll("\\", "/");
+  const normalizedDir = normalize(dir).replaceAll("\\", "/").replace(/\/$/, "");
+  const p = process.platform === "win32" ? normalizedPath.toLowerCase() : normalizedPath;
+  const d = process.platform === "win32" ? normalizedDir.toLowerCase() : normalizedDir;
+  return p === d || p.startsWith(d + "/");
 }
 
 /** Parse `lsof -d cwd -Fpn`: a `p<pid>` line, then `f`/`n<path>` lines for its cwd. */
@@ -44,12 +49,17 @@ export function parsePs(out: string): Map<number, Omit<Proc, "cwd">> {
 }
 
 const SHELLS = new Set(["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "nu"]);
+const WINDOWS_SHELLS = new Set([...SHELLS, "pwsh", "powershell", "cmd"]);
 
 /** An interactive shell on a terminal, like the captain's own tab cd'd into the worktree. */
-export function isTerminalShell(p: Pick<Proc, "tty" | "command">): boolean {
-  if (!p.tty) return false;
+export function isTerminalShell(p: Pick<Proc, "tty" | "command"> & Partial<Pick<Proc, "name">>): boolean {
+  if (!p.tty && !(process.platform === "win32" && p.name)) return false;
   const [program = "", ...args] = p.command.split(/\s+/);
-  return SHELLS.has(basename(program).replace(/^-/, "")) && !args.some((a) => /^-[a-z]*c[a-z]*$/i.test(a));
+  const name = (p.name ?? basename(program)).replace(/^-/, "").replace(/\.exe$/i, "").toLowerCase();
+  if (process.platform === "win32" && p.name) {
+    return WINDOWS_SHELLS.has(name) && !/(?:^|\s)(?:\/c|-c|-command|-commandwithargs|-encodedcommand|-file)(?:\s|$)/i.test(p.command);
+  }
+  return SHELLS.has(name) && !args.some((a) => /^-[a-z]*c[a-z]*$/i.test(a));
 }
 
 /** `pid` and its ancestors: the chain running this t3mate command is never stopped. */
@@ -68,8 +78,31 @@ export function selectWorktreeProcesses(procs: Proc[], worktrees: string[], prot
   return { stop: inside.filter((p) => !isTerminalShell(p)), spared: inside.filter(isTerminalShell) };
 }
 
+/** Keep all parent links, but only use inspected working directories to select processes. */
+export function parseWindowsProcesses(out: string): { table: Map<number, Omit<Proc, "cwd">>; procs: Proc[] } {
+  const rows: unknown = JSON.parse(out);
+  if (!Array.isArray(rows)) throw new Error("Windows process inventory was not an array");
+  const table = new Map<number, Omit<Proc, "cwd">>();
+  const procs: Proc[] = [];
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    const p = row as Record<string, unknown>;
+    if (!Number.isSafeInteger(p.pid) || !Number.isSafeInteger(p.ppid) || typeof p.command !== "string" || typeof p.name !== "string") continue;
+    const base = { pid: p.pid as number, ppid: p.ppid as number, name: p.name, command: p.command, tty: null };
+    table.set(base.pid, base);
+    if (typeof p.cwd === "string" && p.cwd) procs.push({ ...base, cwd: p.cwd });
+  }
+  return { table, procs };
+}
+
 /** Every process (`table`), and those whose working directory this user can see (`procs`). */
 function listProcesses(): { table: Map<number, Omit<Proc, "cwd">>; procs: Proc[] } {
+  if (process.platform === "win32") {
+    const script = join(fileURLToPath(new URL(".", import.meta.url)), "windows-processes.ps1");
+    const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script], { encoding: "utf8", timeout: 30_000, maxBuffer: 64 * 1024 * 1024 });
+    if (result.error || result.status !== 0) throw new Error(`Cannot inspect Windows process directories: ${result.error?.message ?? result.stderr.trim()}`);
+    return parseWindowsProcesses(result.stdout);
+  }
   const table = parsePs(spawnSync("ps", ["-A", "-ww", "-o", "pid=,ppid=,tty=,args="], { encoding: "utf8" }).stdout ?? "");
   let cwds: Map<number, string>;
   if (process.platform === "linux") {

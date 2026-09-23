@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { test } from "node:test";
 
 // Config and state paths are resolved from T3MATE_HOME at import time.
@@ -11,6 +11,18 @@ const { loadConfig, resolveModel, DEFAULTS } = await import("../src/config.ts");
 const { parseStatus, crewBrief } = await import("../src/brief.ts");
 const { formatUpdate } = await import("../src/daemon.ts");
 const { emptyState, findCrew } = await import("../src/state.ts");
+const { storeToken, readToken, deleteToken } = await import("../src/t3.ts");
+
+test("Windows token storage encrypts and reads a token for the current user", { skip: process.platform !== "win32" }, () => {
+  storeToken("t3mate-test-token");
+  try {
+    assert.equal(readToken(), "t3mate-test-token");
+    assert.equal(readFileSync(join(home, "token.dpapi"), "utf8").includes("t3mate-test-token"), false);
+  } finally {
+    deleteToken();
+  }
+  assert.equal(readToken(), null);
+});
 
 test("parseStatus reads the last T3MATE line in any dash style", () => {
   assert.deepEqual(parseStatus("work\nT3MATE: done — fixed it"), { status: "done", summary: "fixed it" });
@@ -37,7 +49,7 @@ test("config layers: later wins, instructions accumulate", () => {
   const root = mkdtempSync(join(tmpdir(), "t3mate-proj-"));
   mkdirSync(join(home, "projects"), { recursive: true });
   writeFileSync(join(home, "config.toml"), `[crew]\nstart_from_origin = true\nmodel = "codex:a"\n[instructions]\ncrew = "global rule"\n`);
-  writeFileSync(join(home, "projects", `${root.split("/").pop()}.toml`), `[crew]\nmodel = "codex:b"\n`);
+  writeFileSync(join(home, "projects", `${basename(root)}.toml`), `[crew]\nmodel = "codex:b"\n`);
   writeFileSync(join(root, ".t3mate.toml"), `[instructions]\ncrew = "repo rule"\n[daemon]\npoll_seconds = 2\n`);
   const config = loadConfig(root);
   assert.equal(config.crew.start_from_origin, true);
@@ -54,7 +66,7 @@ test("crew brief carries kind rules, project instructions, and the task", () => 
   assert.match(brief, /crewmate #7/);
   assert.match(brief, /SCOUT task/);
   assert.match(brief, /use pnpm/);
-  assert.match(brief, /TASK:\nwhy is login slow\?/);
+  assert.match(brief, /TASK:\r?\nwhy is login slow\?/);
   assert.doesNotMatch(brief, /\{\{/);
 });
 
@@ -72,7 +84,7 @@ test("formatUpdate lists events by crewmate", () => {
 test("skill variants differ only in frontmatter", async () => {
   const { readFileSync } = await import("node:fs");
   const body = (variant: string) =>
-    readFileSync(new URL(`../skills/${variant}/t3mate/SKILL.md`, import.meta.url), "utf8").replace(/^---\n[\s\S]*?\n---\n/, "");
+    readFileSync(new URL(`../skills/${variant}/t3mate/SKILL.md`, import.meta.url), "utf8").replaceAll("\r\n", "\n").replace(/^---\n[\s\S]*?\n---\n/, "");
   assert.equal(body("claude"), body("codex"));
 });
 

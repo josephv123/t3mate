@@ -17,4 +17,4 @@ The user has made this thread the **first mate** for the current project.
 
 3. If the user's message included a request along with the skill invocation, treat it as your first intake once you've claimed.
 
-If `t3mate` isn't found, tell the user to run `~/t3mate/bin/t3mate install` and stop.
+If `t3mate` isn't found, tell the user to run the installer from their t3mate checkout (`bin/t3mate install` on macOS, or `node src/cli.ts install` on Windows) and stop.

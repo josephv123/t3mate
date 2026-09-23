@@ -1,12 +1,15 @@
 // The only module that knows T3 Code's (unstable, undocumented) server API.
 // If a T3 update breaks t3mate, the fix belongs here.
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { fail, newId, nowIso, oneLine, run, tryRun } from "./util.ts";
+import { T3MATE_HOME, fail, newId, nowIso, oneLine, run, tryRun } from "./util.ts";
 
 export const T3_HOME = process.env.T3CODE_HOME ?? join(homedir(), ".t3");
-export const T3_APP = process.env.T3MATE_T3_APP ?? "/Applications/T3 Code (Alpha).app";
+export const T3_APP = process.env.T3MATE_T3_APP ?? (process.platform === "win32"
+  ? join(process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local"), "Programs", "t3code")
+  : "/Applications/T3 Code (Alpha).app");
 const KEYCHAIN_SERVICE = "t3mate";
 const KEYCHAIN_ACCOUNT = "t3-token";
 export const TOKEN_LABEL = "t3mate";
@@ -113,21 +116,61 @@ export function origin(): string {
 
 export function readToken(): string | null {
   if (process.env.T3MATE_T3_TOKEN) return process.env.T3MATE_T3_TOKEN;
+  if (process.platform === "win32") {
+    const result = powershellToken("read");
+    return result.status === 0 ? String(result.stdout).trim() || null : null;
+  }
   return tryRun("security", ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", KEYCHAIN_ACCOUNT, "-w"]);
 }
 
 function token(): string {
-  return readToken() ?? fail("No T3 token in Keychain. Run `t3mate install`.");
+  return readToken() ?? fail("No T3 token stored. Run `t3mate install`.");
 }
 
 export function storeToken(value: string): void {
+  if (process.platform === "win32") {
+    const result = powershellToken("write", value);
+    if (result.status !== 0) fail(`Could not save T3 token: ${String(result.stderr).trim()}`);
+    return;
+  }
   run("security", ["add-generic-password", "-U", "-s", KEYCHAIN_SERVICE, "-a", KEYCHAIN_ACCOUNT, "-w", value]);
+}
+
+/** Windows DPAPI encrypts the token for the current user; plaintext enters only via stdin. */
+function powershellToken(action: "read" | "write" | "delete", value = ""): ReturnType<typeof spawnSync> {
+  const path = join(T3MATE_HOME, "token.dpapi");
+  const script = `
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Security
+$path = $env:T3MATE_TOKEN_FILE
+if ($env:T3MATE_TOKEN_ACTION -eq 'write') {
+  $bytes = [Text.Encoding]::UTF8.GetBytes([Console]::In.ReadToEnd())
+  $encrypted = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
+  [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($path)) | Out-Null
+  [IO.File]::WriteAllBytes($path, $encrypted)
+} elseif ($env:T3MATE_TOKEN_ACTION -eq 'read') {
+  if (Test-Path -LiteralPath $path) {
+    $bytes = [System.Security.Cryptography.ProtectedData]::Unprotect([IO.File]::ReadAllBytes($path), $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
+    [Console]::Out.Write([Text.Encoding]::UTF8.GetString($bytes))
+  }
+} else { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
+`;
+  return spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+    input: value, encoding: "utf8", env: { ...process.env, T3MATE_TOKEN_FILE: path, T3MATE_TOKEN_ACTION: action },
+  });
+}
+
+export function deleteToken(): void {
+  if (process.platform === "win32") powershellToken("delete");
+  else tryRun("security", ["delete-generic-password", "-s", KEYCHAIN_SERVICE, "-a", KEYCHAIN_ACCOUNT]);
 }
 
 /** Run T3's own CLI from the installed app bundle. */
 export function t3cli(args: string[]): string {
-  const exe = join(T3_APP, "Contents", "MacOS", "T3 Code (Alpha)");
-  const entry = join(T3_APP, "Contents", "Resources", "app.asar", "apps", "server", "dist", "bin.mjs");
+  const exe = process.platform === "win32" ? join(T3_APP, "T3 Code (Alpha).exe") : join(T3_APP, "Contents", "MacOS", "T3 Code (Alpha)");
+  const resources = process.platform === "win32" ? join(T3_APP, "resources") : join(T3_APP, "Contents", "Resources");
+  const archive = existsSync(join(resources, "server.asar")) ? "server.asar" : "app.asar";
+  const entry = join(resources, archive, "apps", "server", "dist", "bin.mjs");
   return run(exe, [entry, ...args, "--base-dir", T3_HOME], {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
   });

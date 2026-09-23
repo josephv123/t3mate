@@ -1,7 +1,7 @@
 // Zero-token supervision: poll T3's shell snapshot, turn crew state changes into
 // events, and deliver them to the first mate's thread as one message once it is idle.
 // Also tells running crewmates when origin/<base> moves under them.
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseStatus } from "./brief.ts";
 import type { Config } from "./config.ts";
@@ -22,7 +22,13 @@ import {
 } from "./t3.ts";
 import { T3MATE_HOME, nowIso, oneLine, sleep } from "./util.ts";
 
-const log = (msg: string): void => console.log(`${nowIso()} ${msg}`);
+const log = (msg: string): void => {
+  const line = `${nowIso()} ${msg}`;
+  if (process.platform === "win32") {
+    mkdirSync(T3MATE_HOME, { recursive: true });
+    appendFileSync(join(T3MATE_HOME, "daemon.log"), `${line}\n`);
+  } else console.log(line);
+};
 
 /** "7m", "1h05m". */
 export function duration(ms: number): string {
