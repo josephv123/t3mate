@@ -1,0 +1,12 @@
+#!/bin/sh
+# Resolve the repo through symlinks (e.g. ~/.local/bin/t3mate -> repo/bin/t3mate).
+self="$0"
+while [ -L "$self" ]; do
+  target=$(readlink "$self")
+  case "$target" in
+    /*) self="$target" ;;
+    *) self="$(dirname "$self")/$target" ;;
+  esac
+done
+root="$(cd "$(dirname "$self")/.." && pwd)"
+exec node --disable-warning=ExperimentalWarning "$root/src/cli.ts" "$@"

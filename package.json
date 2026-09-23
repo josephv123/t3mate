@@ -1,0 +1,24 @@
+{
+  "name": "t3mate",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A first mate for T3 Code: one thread delegates to a crew of T3 threads in T3 worktrees, any harness.",
+  "type": "module",
+  "bin": {
+    "t3mate": "./bin/t3mate"
+  },
+  "engines": {
+    "node": ">=23.6"
+  },
+  "scripts": {
+    "test": "node --test test/",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "smol-toml": "^1.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}
