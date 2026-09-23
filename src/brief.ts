@@ -25,7 +25,7 @@ export function crewBrief(opts: { n: number; kind: CrewKind; task: string; workt
     : "You are working directly in the project's main checkout, possibly alongside others. Keep your changes tightly scoped.";
   const kindRules =
     opts.kind === "scout"
-      ? "- This is a SCOUT task: the deliverable is knowledge, not a code change. Investigate, reproduce or prototype as needed, but don't commit, push or open PRs. Your final reply IS the report. Make it self-contained: findings, evidence (files, lines, commands), recommendation, open questions.\n"
+      ? "- This is a SCOUT task: the deliverable is knowledge, not a code change. Investigate, reproduce or prototype as needed, and don't commit, push or open PRs unless the task asks for a written record (then land it the way the project lands work). Your final reply IS the report. Make it self-contained: findings, evidence (files, lines, commands), recommendation, open questions.\n"
       : "";
   const project = opts.config.instructions.crew ? `\nProject instructions:\n${opts.config.instructions.crew}\n` : "";
   return playbook("crew.md")
