@@ -1,5 +1,5 @@
 import { realpathSync } from "node:fs";
-import { dirname, sep } from "node:path";
+import { basename, dirname, normalize, sep } from "node:path";
 import type { Project, Shell } from "./t3.ts";
 import { fail, tryRun } from "./util.ts";
 
@@ -15,7 +15,8 @@ const real = (p: string): string => {
 export function repoRoot(cwd: string): string | null {
   const common = tryRun("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd });
   if (!common) return null;
-  return real(common.endsWith(`${sep}.git`) ? dirname(common) : common);
+  const path = normalize(common);
+  return real(basename(path) === ".git" ? dirname(path) : path);
 }
 
 /** Map a directory to its T3 project: exact repo root first, then the deepest containing workspace. */

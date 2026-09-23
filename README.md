@@ -13,19 +13,32 @@ you ──► first mate thread ──t3mate spawn──► #1 crewmate thread  
 
 ## Install
 
+macOS:
+
 ```sh
 git clone <this repo> ~/t3mate && ~/t3mate/bin/t3mate install && t3mate doctor
 ```
 
+Windows PowerShell:
+
+```powershell
+git clone <this repo> "$HOME/t3mate"
+cd "$HOME/t3mate"
+node src/cli.ts install
+node src/cli.ts doctor
+```
+
+Add `$HOME\.local\bin` to your user PATH if the installer warns that it is missing, then reopen your terminal and T3 Code.
+
 `install` does the following:
 
-- links `t3mate` into `~/.local/bin`
+- installs `t3mate` into `~/.local/bin` (`t3mate.cmd` on Windows)
 - links the `t3mate` skill into `~/.claude/skills`, `~/.codex/skills` and `~/.cursor/skills`
 - writes `~/.t3mate/config.toml`
-- issues a 90-day T3 access token (label `t3mate`) into Keychain
-- starts the launchd daemon (`com.t3mate.daemon`)
+- issues a 90-day T3 access token (label `t3mate`) into Keychain on macOS or an encrypted user token file on Windows
+- starts the daemon through launchd on macOS or a logon scheduled task on Windows
 
-Requires macOS, Node ≥ 23.6 (it runs the TypeScript directly), and the T3 Code desktop app running.
+Requires macOS or Windows, Node ≥ 23.6 (it runs the TypeScript directly), and the T3 Code desktop app running. The Windows installer expects the standard per-user T3 install; set `T3MATE_T3_APP` to the installation directory if you installed it elsewhere.
 
 **After the first install, quit and reopen T3 Code once.** T3 keeps each project's skill list in memory until it restarts, so `$t3mate` won't appear in the picker before that.
 
@@ -52,7 +65,7 @@ Running `$t3mate` again in another thread moves the role there. Each project has
 | Waking the first mate | The daemon polls T3's shell snapshot and posts a user message into the first mate's thread once it's idle. No harness hooks. T3 only lets clients start a turn with a user message, so the details ride in a T3 context chip to keep the message to one line. |
 | Stall detection | Each thread's `updatedAt` in the shell snapshot, which T3 bumps on every message, streamed output, tool call and subagent update. A running turn with no bump for `stall_minutes` is stalled. |
 | Per-project knowledge | None needed: the playbook is global. Projects can add guidance through config (below), and their own AGENTS.md/CLAUDE.md decide how work lands (PR, local merge, …). |
-| Auth | A T3 bearer token in Keychain (`t3mate` / `t3-token`), issued with T3's own `t3 auth session issue`. |
+| Auth | A T3 bearer token in macOS Keychain or a Windows DPAPI-encrypted user file, issued with T3's own `t3 auth session issue`. |
 
 Everything T3-specific lives in [`src/t3.ts`](src/t3.ts). T3's API is undocumented and T3 is alpha, so if an update breaks t3mate, that's the file to fix.
 
@@ -109,7 +122,7 @@ Model specs are `instance:model`, with options as a query string (`codex:gpt-5.4
 See `t3mate help`. The first mate uses `brief`, `spawn`, `list`, `peek`, `diff`, `send`, `broadcast`, `stop`, `archive` and `backlog`. You'll mostly use `install`, `doctor`, `daemon logs` and `config`.
 
 - `broadcast "<message>"` sends the same `[first mate]` message as `send` to every active crewmate, running or idle. `--running` limits it to running ones, `--except 3,5` skips some, and `--dry-run` only lists who would get it.
-- `archive <n>` also stops the crewmate's T3 session and any processes still running from its worktree (a server it left up for you, say): SIGTERM, then SIGKILL after a few seconds. It lists what it stopped. It only touches processes whose working directory is inside that crewmate's own worktree, and it leaves terminal shells open there alone. `--keep-processes` skips all of this.
+- `archive <n>` also stops the crewmate's T3 session and processes still running from its worktree, leaving interactive terminal shells alone. On macOS, it sends SIGTERM, then SIGKILL after a grace period; Windows terminates selected processes through Node's signal API. It only selects processes whose working directories it can inspect and confirm are inside that worktree. `--keep-processes` skips session and process cleanup.
 
 ## Layout
 
@@ -123,7 +136,7 @@ src/procs.ts        stopping processes left running in a crewmate's worktree
 src/brief.ts        playbook/brief rendering, crew table, status-line parsing
 src/config.ts       layered TOML config + model resolution
 src/state.ts        per-project state with a file lock
-src/install.ts      install / uninstall / doctor / launchd
+src/install.ts      install / uninstall / doctor / daemon registration
 playbook/           the first mate playbook and the crewmate brief
 skills/             the `t3mate` skill (claude+cursor variant, codex variant)
 ```

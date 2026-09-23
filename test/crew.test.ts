@@ -9,7 +9,7 @@ import { test } from "node:test";
 // user's own config (signing, hooks, default branch).
 const home = mkdtempSync(join(tmpdir(), "t3mate-test-"));
 process.env.T3MATE_HOME = home;
-process.env.GIT_CONFIG_GLOBAL = "/dev/null";
+process.env.GIT_CONFIG_GLOBAL = process.platform === "win32" ? "NUL" : "/dev/null";
 process.env.GIT_CONFIG_NOSYSTEM = "1";
 for (const who of ["AUTHOR", "COMMITTER"]) {
   process.env[`GIT_${who}_NAME`] = "t3mate test";
@@ -19,6 +19,7 @@ const { DEFAULTS, loadConfig } = await import("../src/config.ts");
 const { baseMoveAction, coalesceEvents, detectLongRunning, detectStall, duration, isOutdated } = await import("../src/daemon.ts");
 const { baseMoveMessage, compareWithOrigin, forkPoint, newCommits, pickSpawnBase, resolveSpawnBase } = await import("../src/git.ts");
 const procs = await import("../src/procs.ts");
+const { repoRoot, resolveProject } = await import("../src/project.ts");
 const { broadcastTargets, emptyState } = await import("../src/state.ts");
 type ShellThread = import("../src/t3.ts").ShellThread;
 type CrewEvent = import("../src/state.ts").CrewEvent;
@@ -242,6 +243,19 @@ function repos() {
   return { dir, project, land };
 }
 
+test("resolveProject maps a git worktree to its main checkout", () => {
+  const { dir, project } = repos();
+  const wt = join(dir, "crew");
+  git(project, "worktree", "add", "-q", "-b", "crew", wt);
+  try {
+    assert.equal(repoRoot(wt), realpathSync(project));
+    const selected = { id: "test", title: "test", workspaceRoot: project, deletedAt: null };
+    assert.equal(resolveProject({ projects: [selected], threads: [] }, wt), selected);
+  } finally {
+    git(project, "worktree", "remove", "--force", wt);
+  }
+});
+
 test("spawn base against real repos: fetches, then picks origin only for a stale local base", () => {
   const { project, land } = repos();
   assert.deepEqual(resolveSpawnBase(project, "main", "auto"), { fromOrigin: false }, "in sync");
@@ -288,6 +302,7 @@ test("process selection: only processes inside the worktree, never protected one
   assert.equal(procs.isInside(wt, wt), true);
   assert.equal(procs.isInside(`${wt}/web`, wt), true);
   assert.equal(procs.isInside(`${wt}d`, wt), false, "a sibling sharing the prefix");
+  assert.equal(procs.isInside(`${wt}/../outside`, wt), false, "a path escaping through dot dot");
   assert.equal(procs.isInside("/Users/x/.t3/worktrees/proj", wt), false);
 
   const p = (pid: number, cwd: string, command = "node server.js", tty: string | null = null, ppid = 1) => ({ pid, ppid, tty, command, cwd });
@@ -316,21 +331,32 @@ test("process listing parsers and lineage", () => {
   assert.deepEqual([...procs.lineage(table, 600)], [600, 500, 1]);
   assert.equal(procs.isTerminalShell({ tty: "ttys001", command: "-zsh" }), true);
   assert.equal(procs.isTerminalShell({ tty: null, command: "/bin/zsh" }), false);
+  const windows = procs.parseWindowsProcesses('[{"pid":12,"ppid":2,"name":"node.exe","command":"node server.js","cwd":"C:\\\\wt"},{"pid":2,"ppid":1,"name":"parent.exe","command":"parent.exe","cwd":null}]');
+  assert.deepEqual(windows.procs, [{ pid: 12, ppid: 2, name: "node.exe", command: "node server.js", cwd: "C:\\wt", tty: null }]);
+  assert.deepEqual([...procs.lineage(windows.table, 12)], [12, 2, 1]);
+  if (process.platform === "win32") {
+    assert.equal(procs.isTerminalShell({ tty: null, name: "pwsh.exe", command: "pwsh.exe -NoLogo" }), true);
+    assert.equal(procs.isTerminalShell({ tty: null, name: "pwsh.exe", command: "pwsh.exe -Command npm test" }), false);
+    assert.equal(procs.isTerminalShell({ tty: null, name: "cmd.exe", command: "cmd.exe /c npm test" }), false);
+  }
 });
 
 test("stopWorktreeProcesses stops a process running from the worktree and nothing else", async () => {
   const wt = realpathSync(mkdtempSync(join(tmpdir(), "t3mate-wt-")));
   const outside = realpathSync(mkdtempSync(join(tmpdir(), "t3mate-out-")));
   mkdirSync(join(wt, "server"));
-  const inside = spawn("sleep", ["60"], { cwd: join(wt, "server"), stdio: "ignore" });
-  const bystander = spawn("sleep", ["60"], { cwd: outside, stdio: "ignore" });
+  const command = process.platform === "win32" ? process.execPath : "sleep";
+  const args = process.platform === "win32" ? ["-e", "setInterval(() => {}, 1000)"] : ["60"];
+  const inside = spawn(command, args, { cwd: join(wt, "server"), stdio: "ignore" });
+  const bystander = spawn(command, args, { cwd: outside, stdio: "ignore" });
   const exited = (child: typeof inside) => new Promise<NodeJS.Signals | null>((r) => child.on("exit", (_code, signal) => r(signal)));
   const insideExit = exited(inside);
   try {
     await new Promise((r) => setTimeout(r, 200));
     const result = await procs.stopWorktreeProcesses(wt, 2000);
     assert.deepEqual(result.stopped.map((p) => p.pid), [inside.pid]);
-    assert.equal(await insideExit, "SIGTERM");
+    assert.equal(await insideExit, process.platform === "win32" ? null : "SIGTERM");
+    if (process.platform === "win32") assert.notEqual(inside.exitCode, null);
     assert.equal(bystander.exitCode, null);
     assert.equal(bystander.signalCode, null);
   } finally {
