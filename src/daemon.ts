@@ -3,16 +3,109 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseStatus } from "./brief.ts";
+import type { Config } from "./config.ts";
 import { loadConfig } from "./config.ts";
 import type { CrewEvent, CrewMember, ProjectState } from "./state.ts";
-import { listStates, withState } from "./state.ts";
+import { TERMINAL_EVENTS, listStates, withState } from "./state.ts";
 import type { Collapsed, ShellThread } from "./t3.ts";
-import { getShell, getThread, isBusy, lastAssistantText, sendMessage } from "./t3.ts";
+import {
+  getShell,
+  getThread,
+  isBusy,
+  lastActivityAt,
+  lastActivityNote,
+  lastAssistantText,
+  runningTurn,
+  sendMessage,
+} from "./t3.ts";
 import { T3MATE_HOME, nowIso, oneLine, sleep } from "./util.ts";
 
 const log = (msg: string): void => console.log(`${nowIso()} ${msg}`);
 
-async function crewEvents(c: CrewMember, t: ShellThread | undefined, stallMinutes: number): Promise<CrewEvent[]> {
+/** "7m", "1h05m". */
+export function duration(ms: number): string {
+  const m = Math.max(0, Math.round(ms / 60_000));
+  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}m`;
+}
+
+/**
+ * A running turn that has shown no activity (messages, streamed output, tool calls, subagent
+ * progress) for `stallMinutes` and hasn't been reported for this quiet spell yet. Waiting on
+ * an approval or an answer isn't a stall; those have their own events.
+ */
+export function detectStall(
+  t: ShellThread,
+  watch: CrewMember["watch"],
+  now: number,
+  stallMinutes: number,
+): { activityAt: string; quietMs: number } | null {
+  if (stallMinutes <= 0 || t.hasPendingApprovals || t.hasPendingUserInput) return null;
+  const turn = runningTurn(t);
+  if (!turn || turn.turnId === watch.lastSettledTurnId) return null;
+  const activityAt = lastActivityAt(t);
+  const quietMs = now - Date.parse(activityAt);
+  if (quietMs < stallMinutes * 60_000 || watch.stallNotifiedActivityAt === activityAt) return null;
+  return { activityAt, quietMs };
+}
+
+/**
+ * A turn that has been running for over `minutes` and is still active (not quiet for
+ * `stallMinutes`: that's a stall instead). Reported once per turn, as information.
+ */
+export function detectLongRunning(
+  t: ShellThread,
+  watch: CrewMember["watch"],
+  now: number,
+  minutes: number,
+  stallMinutes: number,
+): { turnId: string; runningMs: number } | null {
+  if (minutes <= 0) return null;
+  const turn = runningTurn(t);
+  if (!turn || turn.turnId === watch.lastSettledTurnId || turn.turnId === watch.longRunningNotifiedTurnId) return null;
+  if (stallMinutes > 0 && now - Date.parse(lastActivityAt(t)) >= stallMinutes * 60_000) return null;
+  const runningMs = now - Date.parse(turn.startedAt ?? turn.requestedAt);
+  return runningMs >= minutes * 60_000 ? { turnId: turn.turnId, runningMs } : null;
+}
+
+const TERMINAL = new Set<string>(TERMINAL_EVENTS);
+
+/**
+ * Collapse undelivered events. A terminal event (finished, errored, interrupted, gone)
+ * supersedes earlier in-turn events for the same crewmate: a stall or approval request from
+ * before it finished is old news. A repeat of an in-turn event replaces the older one, and a
+ * stall supersedes a long-running heads-up.
+ */
+export function coalesceEvents(events: CrewEvent[]): CrewEvent[] {
+  const out: CrewEvent[] = [];
+  for (const e of events) {
+    const supersedes = (o: CrewEvent): boolean =>
+      o.n === e.n &&
+      !TERMINAL.has(o.kind) &&
+      (TERMINAL.has(e.kind) || o.kind === e.kind || (e.kind === "stalled" && o.kind === "long-running"));
+    for (let i = out.length - 1; i >= 0; i--) if (supersedes(out[i]!)) out.splice(i, 1);
+    out.push(e);
+  }
+  return out;
+}
+
+/** An undelivered in-turn event that stopped being true before it could go out. */
+export function isOutdated(e: CrewEvent, t: ShellThread | undefined): boolean {
+  if (!t) return false;
+  switch (e.kind) {
+    case "stalled":
+      return !runningTurn(t) || Date.parse(lastActivityAt(t)) > Date.parse(e.at);
+    case "long-running":
+      return !runningTurn(t);
+    case "needs-approval":
+      return !t.hasPendingApprovals;
+    case "needs-input":
+      return !t.hasPendingUserInput;
+    default:
+      return false;
+  }
+}
+
+async function crewEvents(c: CrewMember, t: ShellThread | undefined, daemon: Config["daemon"]): Promise<CrewEvent[]> {
   const events: CrewEvent[] = [];
   const at = nowIso();
   const event = (kind: CrewEvent["kind"], detail: string) => events.push({ n: c.n, kind, detail, at });
@@ -50,15 +143,20 @@ async function crewEvents(c: CrewMember, t: ShellThread | undefined, stallMinute
     }
   }
 
-  if (
-    stallMinutes > 0 &&
-    turn?.state === "running" &&
-    turn.startedAt &&
-    Date.now() - Date.parse(turn.startedAt) > stallMinutes * 60_000 &&
-    w.stallNotifiedTurnId !== turn.turnId
-  ) {
-    w.stallNotifiedTurnId = turn.turnId;
-    event("stalled", `current turn has been running for over ${stallMinutes}m`);
+  const now = Date.now();
+  const stall = detectStall(t, w, now, daemon.stall_minutes);
+  if (stall) {
+    w.stallNotifiedActivityAt = stall.activityAt;
+    const last = await getThread(t.id).then(lastActivityNote, () => null);
+    event("stalled", `no activity for ${duration(stall.quietMs)} in its running turn${last ? `; last: ${last}` : ""}`);
+  }
+  const long = detectLongRunning(t, w, now, daemon.long_running_minutes, daemon.stall_minutes);
+  if (long) {
+    w.longRunningNotifiedTurnId = long.turnId;
+    event(
+      "long-running",
+      `its turn has run for ${duration(long.runningMs)} and it's still active (last activity ${duration(now - Date.parse(lastActivityAt(t)))} ago). Informational.`,
+    );
   }
   return events;
 }
@@ -92,11 +190,19 @@ async function tickProject(projectId: string, threads: Map<string, ShellThread>)
     async (state) => {
       const config = loadConfig(state.root);
       for (const c of state.crew.filter((c) => c.status === "active")) {
-        for (const e of await crewEvents(c, threads.get(c.threadId), config.daemon.stall_minutes)) {
+        for (const e of await crewEvents(c, threads.get(c.threadId), config.daemon)) {
           log(`${state.title} #${e.n} ${e.kind}: ${e.detail}`);
           state.pending.push(e);
         }
       }
+      const crewThread = (n: number) => {
+        const c = state.crew.find((c) => c.n === n);
+        return c ? threads.get(c.threadId) : undefined;
+      };
+      const current = coalesceEvents(state.pending).filter((e) => !isOutdated(e, crewThread(e.n)));
+      for (const e of state.pending.filter((e) => !current.includes(e))) log(`${state.title} #${e.n} ${e.kind}: dropped, superseded or no longer true`);
+      state.pending = current;
+
       if (!state.pending.length || !state.firstMate) return;
 
       const fm = threads.get(state.firstMate.threadId);

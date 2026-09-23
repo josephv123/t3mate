@@ -30,8 +30,10 @@ export interface Config {
   };
   daemon: {
     poll_seconds: number;
-    /** Tell the first mate when a crew turn has been running this long. 0 disables. */
+    /** Report a crewmate as stalled when its running turn has shown no activity for this long. 0 disables. */
     stall_minutes: number;
+    /** One informational heads-up per turn that has been running (and active) this long. 0 disables. */
+    long_running_minutes: number;
     /** Wait this long after the first crew event so simultaneous events arrive as one message. */
     batch_seconds: number;
   };
@@ -46,7 +48,7 @@ export const DEFAULTS: Config = {
   },
   models: {},
   instructions: { firstmate: "", crew: "" },
-  daemon: { poll_seconds: 5, stall_minutes: 45, batch_seconds: 8 },
+  daemon: { poll_seconds: 5, stall_minutes: 15, long_running_minutes: 90, batch_seconds: 8 },
 };
 
 export const globalConfigPath = (): string => join(T3MATE_HOME, "config.toml");

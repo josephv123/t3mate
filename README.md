@@ -50,6 +50,7 @@ Running `$t3mate` again in another thread moves the role there. Each project has
 | Crewmate threads + worktrees | T3's own turn-start bootstrap over its websocket RPC: T3 creates the worktree, runs the project's setup script, names the branch, and applies its cleanup policies. |
 | Which thread is the first mate | The skill has the agent run `t3mate claim --nonce <random>`. t3mate finds the running thread whose live tool call contains that nonce. That works in every harness, since T3 doesn't expose thread ids to agents. |
 | Waking the first mate | The daemon polls T3's shell snapshot and posts a user message into the first mate's thread once it's idle. No harness hooks. T3 only lets clients start a turn with a user message, so the details ride in a T3 context chip to keep the message to one line. |
+| Stall detection | Each thread's `updatedAt` in the shell snapshot, which T3 bumps on every message, streamed output, tool call and subagent update. A running turn with no bump for `stall_minutes` is stalled. |
 | Per-project knowledge | None needed: the playbook is global. Projects can add guidance through config (below), and their own AGENTS.md/CLAUDE.md decide how work lands (PR, local merge, …). |
 | Auth | A T3 bearer token in Keychain (`t3mate` / `t3-token`), issued with T3's own `t3 auth session issue`. |
 
@@ -80,7 +81,8 @@ crew = "Use pnpm, never npm."
 
 [daemon]                          # global layer only
 poll_seconds = 5
-stall_minutes = 45
+stall_minutes = 15                # running turn with no activity (output, tool calls) this long
+long_running_minutes = 90         # one informational heads-up per turn that runs this long
 batch_seconds = 8
 ```
 

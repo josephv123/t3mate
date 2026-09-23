@@ -75,7 +75,8 @@ const CONFIG_TEMPLATE = `# t3mate global config. Layers (later wins):
 
 [daemon]
 # poll_seconds = 5
-# stall_minutes = 45
+# stall_minutes = 15             # running turn with no activity (output, tool calls) this long
+# long_running_minutes = 90      # one informational heads-up per turn that runs this long
 # batch_seconds = 8
 `;
 

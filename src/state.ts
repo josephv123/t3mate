@@ -25,13 +25,20 @@ export interface CrewMember {
     lastSettledTurnId?: string;
     approvalNotified?: boolean;
     inputNotified?: boolean;
-    stallNotifiedTurnId?: string;
+    /** The thread's last-activity time when we reported it stalled: one report per quiet spell. */
+    stallNotifiedActivityAt?: string;
+    longRunningNotifiedTurnId?: string;
   };
 }
 
+/** Events that end a turn. They supersede undelivered in-turn events for the same crewmate. */
+export const TERMINAL_EVENTS = ["finished", "errored", "interrupted", "gone"] as const;
+/** Events about a turn that is still in flight. */
+export const IN_TURN_EVENTS = ["needs-approval", "needs-input", "stalled", "long-running"] as const;
+
 export interface CrewEvent {
   n: number;
-  kind: "finished" | "errored" | "interrupted" | "needs-approval" | "needs-input" | "stalled" | "gone";
+  kind: (typeof TERMINAL_EVENTS)[number] | (typeof IN_TURN_EVENTS)[number];
   detail: string;
   at: string;
 }

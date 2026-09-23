@@ -64,6 +64,12 @@ export interface ShellThread {
   hasPendingApprovals: boolean;
   hasPendingUserInput: boolean;
   archivedAt: string | null;
+  /**
+   * T3's projection bumps this on every thread event: messages (including streamed output),
+   * activities (tool calls, subagent progress), session changes and turn diffs. Metadata edits
+   * (title, pin, PR sync) bump it too. See `lastActivityAt`.
+   */
+  updatedAt: string;
   pullRequests?: PullRequestRef[];
   branchPullRequest?: PullRequestRef | null;
 }
@@ -336,6 +342,34 @@ export function isBusy(thread: ShellThread): boolean {
     thread.session?.status === "running" ||
     thread.session?.status === "starting"
   );
+}
+
+/** The latest turn if it is still in flight: T3 hasn't settled it and the session is live. */
+export function runningTurn(thread: ShellThread): LatestTurn | null {
+  const turn = thread.latestTurn;
+  if (!turn || turn.state !== "running" || turn.completedAt) return null;
+  if (thread.session && thread.session.status !== "running" && thread.session.status !== "starting") return null;
+  return turn;
+}
+
+/**
+ * When the thread last showed signs of life, from the shell snapshot alone (no extra request).
+ * `updatedAt` moves with every message, streamed output, tool call and activity T3 records.
+ */
+export function lastActivityAt(thread: ShellThread): string {
+  const times = [thread.updatedAt, thread.latestTurn?.startedAt, thread.latestTurn?.requestedAt].filter(
+    (t): t is string => typeof t === "string" && !Number.isNaN(Date.parse(t)),
+  );
+  return times.reduce((a, b) => (Date.parse(b) > Date.parse(a) ? b : a), times[0] ?? new Date(0).toISOString());
+}
+
+/** One line on the thread's most recent tool call or activity, e.g. `Command run (Bash: npm test)`. */
+export function lastActivityNote(thread: ThreadDetail): string | null {
+  const activity = thread.activities.findLast((a) => a.kind !== "context-window.updated" && a.kind !== "checkpoint.captured");
+  if (!activity) return null;
+  const payload = activity.payload as { detail?: unknown } | null;
+  const detail = typeof payload?.detail === "string" && !/:\s*\{\}$/.test(payload.detail) ? payload.detail : "";
+  return oneLine(detail ? `${activity.summary} (${detail})` : activity.summary, 160);
 }
 
 export function lastAssistantText(thread: ThreadDetail): string {
