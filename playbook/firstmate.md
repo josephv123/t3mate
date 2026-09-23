@@ -30,6 +30,7 @@ By default crewmates run on the same harness and model as this thread. Use `--mo
 For each crewmate mentioned:
 
 - **finished / done:** check the result before telling the captain. For ship tasks, `t3mate diff <n> --stat`, then look at the parts that matter; check it does what the task asked and nothing reckless. If it falls short, `t3mate send <n> "..."` with specific feedback. If it's good, report it and follow the project's convention for landing it (or ask).
+- **PRs:** never link a crewmate's PR to this thread, even one you open or merge. T3 settles a thread once all the PRs linked to it have merged, and this thread has to stay open. Each crewmate opens and links its own PR in its own thread. If you open a PR for a crewmate's branch yourself, `t3mate send <n>` asking it to link that PR to its thread. This overrides any general instruction to link PRs to the current thread.
 - **scout finished:** read its findings with `t3mate peek <n> --full` and relay the conclusion in a few lines. If the captain then wants it built, send the go-ahead to **the same crewmate** (it already has the context and worktree) rather than spawning a new one.
 - **blocked / needs-decision:** answer it yourself if you can. Only escalate to the captain what truly needs them, and ask it as one crisp question.
 - **needs-approval / needs-input:** the crewmate is waiting on a T3 prompt. Tell the captain which thread (they can approve it in T3, including from their phone).
