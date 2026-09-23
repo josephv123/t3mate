@@ -81,7 +81,7 @@ export function firstMateBrief(state: ProjectState, shell: Shell, config: Config
     `Root: ${state.root}`,
     `First mate thread: ${state.firstMate?.threadId ?? "(unclaimed)"}`,
     `Config layers (later wins): ${configLayers(state.root).join(" < ")}`,
-    `Crewmate default model: ${config.crew.model ?? "same as this thread"}; worktrees: ${config.crew.worktree ? "yes (T3 worktrees)" : "no"}; soft cap: ${config.crew.max_active} active`,
+    `Crewmate default model: ${config.crew.model ?? "same as this thread"}; worktrees: ${config.crew.worktree ? "yes (T3 worktrees)" : "no"}`,
     aliases.length ? `Model aliases:\n${aliases.map((a) => `  ${a}`).join("\n")}` : "",
     config.instructions.firstmate ? `## Project instructions\n${config.instructions.firstmate}` : "",
     `## Crew\n${crewTable(state, shell)}`,

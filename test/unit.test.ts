@@ -36,11 +36,11 @@ test("resolveModel handles inherit, specs with options, and aliases", () => {
 test("config layers: later wins, instructions accumulate", () => {
   const root = mkdtempSync(join(tmpdir(), "t3mate-proj-"));
   mkdirSync(join(home, "projects"), { recursive: true });
-  writeFileSync(join(home, "config.toml"), `[crew]\nmax_active = 3\nmodel = "codex:a"\n[instructions]\ncrew = "global rule"\n`);
+  writeFileSync(join(home, "config.toml"), `[crew]\nstart_from_origin = true\nmodel = "codex:a"\n[instructions]\ncrew = "global rule"\n`);
   writeFileSync(join(home, "projects", `${root.split("/").pop()}.toml`), `[crew]\nmodel = "codex:b"\n`);
   writeFileSync(join(root, ".t3mate.toml"), `[instructions]\ncrew = "repo rule"\n[daemon]\npoll_seconds = 2\n`);
   const config = loadConfig(root);
-  assert.equal(config.crew.max_active, 3);
+  assert.equal(config.crew.start_from_origin, true);
   assert.equal(config.crew.model, "codex:b");
   assert.equal(config.crew.worktree, true);
   assert.equal(config.daemon.poll_seconds, 2);

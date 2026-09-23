@@ -69,7 +69,6 @@ model = "codex:gpt-5.4"          # unset: same model as the first mate thread
 runtime_mode = "full-access"     # unset: same as the first mate thread
 base_branch = "main"             # unset: project's current branch
 worktree = true
-max_active = 6
 
 [models]                          # aliases for spawn --model
 fast = "codex:gpt-5.6-luna"

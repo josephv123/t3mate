@@ -19,7 +19,7 @@ First mate (that thread) uses:
   brief                              playbook + live crew/backlog for this project
   spawn [opts] -- "<task>"           dispatch a crewmate (task may also come via stdin / --file)
       --scout                          deliverable is a report, not a code change
-      --title <t>  --model <spec|alias>  --base <branch>  --here (no worktree)  --force
+      --title <t>  --model <spec|alias>  --base <branch>  --here (no worktree)
   list [--all]                       crew status
   peek <n> [--full]                  state, branch, PRs, last reply
   diff <n> [--stat]                  crewmate's changes vs its base
@@ -161,11 +161,6 @@ async function cmdSpawn(args: Args): Promise<void> {
   const fmId = ctx.state.firstMate?.threadId;
   const fm = fmId ? ctx.thread(fmId) : undefined;
   if (!fm) fail("This project has no first mate. Send `$t3mate` in a T3 thread first.");
-
-  const active = ctx.state.crew.filter((c) => c.status === "active").length;
-  if (active >= ctx.config.crew.max_active && !args.flags.force) {
-    fail(`${active} crewmates are already active (max_active = ${ctx.config.crew.max_active}). Archive finished ones, backlog this, or pass --force.`);
-  }
 
   const kind = args.flags.scout ? "scout" : "ship";
   const modelSpec = str(args.flags.model) ?? ctx.config.crew.model ?? "inherit";

@@ -19,8 +19,6 @@ export interface Config {
     base_branch?: string;
     start_from_origin: boolean;
     run_setup_script: boolean;
-    /** Soft cap on concurrently active crewmates; `spawn --force` overrides. */
-    max_active: number;
   };
   /** Aliases usable anywhere a model spec is accepted: "instance:model" or a table. */
   models: Record<string, string | { model: string; options?: Record<string, unknown> }>;
@@ -45,7 +43,6 @@ export const DEFAULTS: Config = {
     worktree: true,
     start_from_origin: false,
     run_setup_script: true,
-    max_active: 6,
   },
   models: {},
   instructions: { firstmate: "", crew: "" },

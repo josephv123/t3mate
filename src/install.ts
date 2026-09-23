@@ -64,7 +64,6 @@ const CONFIG_TEMPLATE = `# t3mate global config. Layers (later wins):
 # worktree = true                # each crewmate gets its own T3 worktree
 # start_from_origin = false
 # run_setup_script = true        # run the T3 project's worktree setup script
-# max_active = 6
 
 [models]
 # fast = "codex:gpt-5.6-luna"
