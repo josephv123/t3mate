@@ -100,7 +100,9 @@ Model specs are `instance:model`, with options as a query string (`codex:gpt-5.4
 
 ## Commands
 
-See `t3mate help`. The first mate uses `brief`, `spawn`, `list`, `peek`, `diff`, `send`, `stop`, `archive` and `backlog`. You'll mostly use `install`, `doctor`, `daemon logs` and `config`.
+See `t3mate help`. The first mate uses `brief`, `spawn`, `list`, `peek`, `diff`, `send`, `broadcast`, `stop`, `archive` and `backlog`. You'll mostly use `install`, `doctor`, `daemon logs` and `config`.
+
+- `broadcast "<message>"` sends the same `[first mate]` message as `send` to every active crewmate, running or idle. `--running` limits it to running ones, `--except 3,5` skips some, and `--dry-run` only lists who would get it.
 
 ## Layout
 

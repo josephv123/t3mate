@@ -3,7 +3,8 @@
 // goes through withState() under a lock.
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { InteractionMode, RuntimeMode } from "./t3.ts";
+import type { InteractionMode, RuntimeMode, ShellThread } from "./t3.ts";
+import { isBusy } from "./t3.ts";
 import { T3MATE_HOME, fail, sleep } from "./util.ts";
 
 export type CrewKind = "ship" | "scout";
@@ -149,4 +150,25 @@ export function findCrew(state: ProjectState, ref: string): CrewMember | undefin
     fail(`"${ref}" matches more than one crewmate: ${candidates}. Use the crew number or the full thread id.`);
   }
   return matches[0];
+}
+
+/** Active crewmates whose T3 thread still exists and isn't archived. */
+export function liveCrew(
+  state: ProjectState,
+  thread: (id: string) => ShellThread | undefined,
+): { c: CrewMember; t: ShellThread }[] {
+  return state.crew.flatMap((c) => {
+    const t = c.status === "active" ? thread(c.threadId) : undefined;
+    return t && !t.archivedAt ? [{ c, t }] : [];
+  });
+}
+
+/** Who `t3mate broadcast` messages: every live crewmate, or only running ones, minus exclusions. */
+export function broadcastTargets(
+  state: ProjectState,
+  thread: (id: string) => ShellThread | undefined,
+  opts: { runningOnly?: boolean; except?: number[] } = {},
+): { c: CrewMember; t: ShellThread }[] {
+  const except = new Set(opts.except ?? []);
+  return liveCrew(state, thread).filter(({ c, t }) => !except.has(c.n) && (!opts.runningOnly || isBusy(t)));
 }

@@ -6,10 +6,10 @@ import { daemonPid, runDaemon, tick } from "./daemon.ts";
 import { DAEMON_LOG, daemonInstall, daemonRestart, daemonUninstall, doctor, install, uninstall } from "./install.ts";
 import { currentBranch, resolveProject } from "./project.ts";
 import type { CrewMember, ProjectState } from "./state.ts";
-import { emptyState, findCrew, readState, withState } from "./state.ts";
+import { broadcastTargets, emptyState, findCrew, readState, withState } from "./state.ts";
 import type { Project, Shell, ShellThread } from "./t3.ts";
 import { archiveThread, getShell, getThread, interruptThread, isBusy, lastAssistantText, sendMessage, startThread } from "./t3.ts";
-import { UserError, fail, nowIso, oneLine, readStdin, run, sleep, tail, tryRun } from "./util.ts";
+import { UserError, fail, nowIso, oneLine, plural, readStdin, run, sleep, tail, tryRun } from "./util.ts";
 
 const HELP = `t3mate — a first mate for T3 Code
 
@@ -24,6 +24,8 @@ First mate (that thread) uses:
   peek <n> [--full]                  state, branch, PRs, last reply
   diff <n> [--stat]                  crewmate's changes vs its base
   send <n> "<message>"               follow up with / steer a crewmate
+  broadcast [opts] "<message>"       send to every active crewmate (running or idle)
+      --running  only running ones    --except 3,5  skip some    --dry-run  just list who'd get it
   stop <n>                           interrupt a crewmate's running turn
   archive <n>...                     retire crewmates (archives their T3 threads)
       <n> is the crew number (3 or #3) or the crewmate's T3 thread id
@@ -42,7 +44,7 @@ interface Args {
   flags: Record<string, string | true>;
 }
 
-const VALUE_FLAGS = new Set(["nonce", "thread", "title", "model", "base", "file", "runtime-mode"]);
+const VALUE_FLAGS = new Set(["nonce", "thread", "title", "model", "base", "file", "runtime-mode", "except"]);
 
 function parseArgs(argv: string[]): Args {
   const positional: string[] = [];
@@ -255,6 +257,9 @@ async function cmdDiff(args: Args): Promise<void> {
   console.log(out.join("\n\n"));
 }
 
+/** What `send` and `broadcast` post: the crew brief tells crewmates "[first mate]" means us. */
+const toCrew = (t: ShellThread, text: string): Promise<void> => sendMessage(t, `[first mate] ${text.trim()}`);
+
 async function cmdSend(args: Args): Promise<void> {
   const ctx = await context();
   const c = crewOrFail(ctx.state, args.positional[0]);
@@ -262,8 +267,37 @@ async function cmdSend(args: Args): Promise<void> {
   const t = ctx.thread(c.threadId) ?? fail(`#${c.n}'s T3 thread is gone.`);
   if (t.archivedAt) fail(`#${c.n} is archived.`);
   const busy = isBusy(t);
-  await sendMessage(t, `[first mate] ${text.trim()}`);
+  await toCrew(t, text);
   console.log(busy ? `Sent to #${c.n} (it was mid-turn; the message steers the running turn).` : `Sent to #${c.n}; it's working on it.`);
+}
+
+async function cmdBroadcast(args: Args): Promise<void> {
+  const ctx = await context();
+  const text = await taskText(args, 0);
+  const exceptRefs = (str(args.flags.except) ?? "").split(/[\s,]+/).filter(Boolean);
+  const except = exceptRefs.map((ref) => crewOrFail(ctx.state, ref).n);
+  const runningOnly = args.flags.running === true;
+  const targets = broadcastTargets(ctx.state, ctx.thread, { runningOnly, except });
+  if (!targets.length) {
+    console.log(`No ${runningOnly ? "running" : "active"} crewmates to message${except.length ? " (after --except)" : ""}.`);
+    return;
+  }
+  const who = ({ c, t }: (typeof targets)[number]) => `#${c.n} "${oneLine(t.title, 60)}" (${isBusy(t) ? "running: steers its turn" : "idle: starts a new turn"})`;
+  if (args.flags["dry-run"]) {
+    console.log(`Would send to ${plural(targets.length, "crewmate")}:\n${targets.map((x) => `  ${who(x)}`).join("\n")}\n\n[first mate] ${text.trim()}`);
+    return;
+  }
+  const failed: string[] = [];
+  for (const target of targets) {
+    try {
+      await toCrew(target.t, text);
+      console.log(`Sent to ${who(target)}`);
+    } catch (error) {
+      failed.push(`#${target.c.n}`);
+      console.error(`Failed to send to #${target.c.n}: ${(error as Error).message}`);
+    }
+  }
+  if (failed.length) fail(`Not delivered to ${failed.join(", ")}.`);
 }
 
 async function cmdStop(args: Args): Promise<void> {
@@ -342,6 +376,10 @@ async function cmdConfig(): Promise<void> {
 async function main(): Promise<void> {
   const [command = "help", ...rest] = process.argv.slice(2);
   const args = parseArgs(rest);
+  if (args.flags.help === true) {
+    console.log(HELP);
+    return;
+  }
   switch (command) {
     case "claim":
       return cmdClaim(args);
@@ -359,6 +397,8 @@ async function main(): Promise<void> {
       return cmdDiff(args);
     case "send":
       return cmdSend(args);
+    case "broadcast":
+      return cmdBroadcast(args);
     case "stop":
       return cmdStop(args);
     case "archive":

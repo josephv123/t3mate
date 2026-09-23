@@ -55,6 +55,8 @@ t3mate list                           # crew status
 t3mate peek <n> [--full]              # state, branch, PRs, last reply
 t3mate diff <n> [--stat]              # crewmate's changes vs its base
 t3mate send <n> "<message>"           # follow up / answer / steer a crewmate
+t3mate broadcast [--running] [--except 3,5] "<message>"
+                                      # the same message to every active crewmate
 t3mate stop <n>                       # interrupt a running crewmate
 t3mate archive <n>...                 # retire crewmates (archives their T3 threads)
 t3mate backlog add "<item>" | list | done <n>

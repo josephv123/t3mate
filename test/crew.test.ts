@@ -8,8 +8,10 @@ import { test } from "node:test";
 process.env.T3MATE_HOME = mkdtempSync(join(tmpdir(), "t3mate-test-"));
 const { DEFAULTS } = await import("../src/config.ts");
 const { coalesceEvents, detectLongRunning, detectStall, duration, isOutdated } = await import("../src/daemon.ts");
+const { broadcastTargets, emptyState } = await import("../src/state.ts");
 type ShellThread = import("../src/t3.ts").ShellThread;
 type CrewEvent = import("../src/state.ts").CrewEvent;
+type CrewMember = import("../src/state.ts").CrewMember;
 
 const NOW = Date.parse("2026-09-23T12:00:00.000Z");
 const minsAgo = (m: number): string => new Date(NOW - m * 60_000).toISOString();
@@ -122,4 +124,27 @@ test("outdated: undelivered events that stopped being true are dropped", () => {
   assert.equal(isOutdated(ev(1, "needs-input"), thread({ hasPendingUserInput: true })), false);
   assert.equal(isOutdated(ev(1, "finished"), thread()), false);
   assert.equal(isOutdated(ev(1, "stalled"), undefined), false);
+});
+
+// ---------------------------------------------------------------- broadcast
+
+const mate = (n: number, threadId: string, status: CrewMember["status"] = "active"): CrewMember => ({
+  n, threadId, title: `c${n}`, kind: "ship", task: "", baseBranch: "main", model: "m", createdAt: "", status, watch: {},
+});
+
+test("broadcast targets: live crew, optionally only running, minus exclusions", () => {
+  const state = emptyState("p", "/r", "proj");
+  state.crew.push(mate(1, "run"), mate(2, "idle"), mate(3, "old", "archived"), mate(4, "archived-in-t3"), mate(5, "gone"), mate(6, "run2"));
+  const threads = new Map<string, ShellThread>([
+    ["run", thread({ id: "run" })],
+    ["idle", thread({ id: "idle", turnState: "completed" })],
+    ["old", thread({ id: "old" })],
+    ["archived-in-t3", thread({ id: "archived-in-t3", archivedAt: minsAgo(1) })],
+    ["run2", thread({ id: "run2" })],
+  ]);
+  const ns = (opts: Parameters<typeof broadcastTargets>[2]) => broadcastTargets(state, (id) => threads.get(id), opts).map(({ c }) => c.n);
+  assert.deepEqual(ns({}), [1, 2, 6]);
+  assert.deepEqual(ns({ runningOnly: true }), [1, 6]);
+  assert.deepEqual(ns({ except: [1, 2] }), [6]);
+  assert.deepEqual(ns({ runningOnly: true, except: [6] }), [1]);
 });

@@ -60,3 +60,5 @@ export async function readStdin(): Promise<string | null> {
   for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
   return Buffer.concat(chunks).toString("utf8");
 }
+
+export const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? "" : /(s|sh|ch|x)$/.test(word) ? "es" : "s"}`;
