@@ -61,7 +61,7 @@ export function crewTable(state: ProjectState, shell: Shell, opts: { all?: boole
         c.kind.padEnd(5),
         crewState(t).padEnd(14),
         ago(since).padStart(4),
-        ` ${oneLine(c.title, 48)}`,
+        ` ${oneLine(t?.title ?? c.title, 60)}`,
         t?.branch ? `  [${t.branch}]` : "",
         pr ? `  ${pr}` : "",
       ].join(" ");

@@ -13,7 +13,7 @@ import { UserError, fail, nowIso, oneLine, readStdin, run, sleep, tail, tryRun }
 
 const HELP = `t3mate — a first mate for T3 Code
 
-Captain (you): run /firstmate in any T3 thread, in any project, on any harness.
+Captain (you): send "$t3mate <request>" in any T3 thread, in any project, on any harness.
 First mate (that thread) uses:
   claim --nonce <random>             make the calling thread this project's first mate
   brief                              playbook + live crew/backlog for this project
@@ -159,7 +159,7 @@ async function cmdSpawn(args: Args): Promise<void> {
   const task = await taskText(args, 0);
   const fmId = ctx.state.firstMate?.threadId;
   const fm = fmId ? ctx.thread(fmId) : undefined;
-  if (!fm) fail("This project has no first mate. Run /firstmate in a T3 thread first.");
+  if (!fm) fail("This project has no first mate. Send `$t3mate` in a T3 thread first.");
 
   const active = ctx.state.crew.filter((c) => c.status === "active").length;
   if (active >= ctx.config.crew.max_active && !args.flags.force) {
@@ -182,7 +182,7 @@ async function cmdSpawn(args: Args): Promise<void> {
   const threadId = await startThread({
     projectId: ctx.project.id,
     projectRoot: ctx.project.workspaceRoot,
-    title: `#${n} ${title}`,
+    title,
     text: crewBrief({ n, kind, task, worktree, config: ctx.config }),
     modelSelection,
     runtimeMode,
@@ -226,7 +226,7 @@ async function cmdPeek(args: Args): Promise<void> {
   const status = parseStatus(reply);
   const prs = [t.branchPullRequest, ...(t.pullRequests ?? [])].filter((p) => p?.url).map((p) => `${p!.url}${p!.state ? ` (${p!.state})` : ""}`);
   const header = [
-    `#${c.n} ${c.title}  [${c.kind}, ${c.model}]`,
+    `#${c.n} "${t.title}"  [${c.kind}, ${c.model}]`,
     `state:    ${crewState(t)}${t.session?.lastError ? ` — ${oneLine(t.session.lastError, 200)}` : ""}`,
     `thread:   ${t.id}`,
     `branch:   ${t.branch ?? "-"}${c.baseBranch ? ` (base ${c.baseBranch})` : ""}`,
@@ -289,7 +289,7 @@ async function cmdArchive(args: Args): Promise<void> {
       if (m) m.status = "archived";
       s.pending = s.pending.filter((e) => e.n !== c.n);
     });
-    console.log(`Archived #${c.n} ${c.title}`);
+    console.log(`Archived #${c.n} "${t?.title ?? c.title}"`);
   }
 }
 
@@ -328,7 +328,7 @@ async function cmdDaemon(args: Args): Promise<void> {
   const sub = args.positional[0] ?? "status";
   if (sub === "run") await runDaemon();
   else if (sub === "tick") await tick();
-  else if (sub === "install") console.log(daemonInstall());
+  else if (sub === "install") console.log(await daemonInstall());
   else if (sub === "uninstall") console.log(daemonUninstall());
   else if (sub === "restart") console.log(daemonRestart());
   else if (sub === "logs") console.log(existsSync(DAEMON_LOG) ? run("tail", ["-n", "60", DAEMON_LOG]) : "(no log yet)");

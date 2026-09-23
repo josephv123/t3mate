@@ -61,13 +61,15 @@ test("crew brief carries kind rules, project instructions, and the task", () => 
 test("formatUpdate lists events by crewmate", () => {
   const state = emptyState("p", "/r", "proj");
   state.crew.push({ n: 2, threadId: "t", title: "dark mode", kind: "ship", task: "", baseBranch: "main", model: "m", createdAt: "", status: "active", watch: {} });
-  const msg = formatUpdate(state, [{ n: 2, kind: "finished", detail: "done — added toggle", at: "" }]);
-  assert.match(msg, /^\[t3mate\] Crew update:\n- #2 dark mode — finished: done — added toggle/);
+  const events = [{ n: 2, kind: "finished" as const, detail: "done — added toggle", at: "" }];
+  assert.match(formatUpdate(state, events, new Map()), /^\[t3mate\] Crew update:\n- #2 "dark mode" — finished: done — added toggle/);
+  const live = new Map([["t", { title: "Add dark mode toggle" } as never]]);
+  assert.match(formatUpdate(state, events, live), /- #2 "Add dark mode toggle" — finished/);
 });
 
 test("skill variants differ only in frontmatter", async () => {
   const { readFileSync } = await import("node:fs");
   const body = (variant: string) =>
-    readFileSync(new URL(`../skills/${variant}/firstmate/SKILL.md`, import.meta.url), "utf8").replace(/^---\n[\s\S]*?\n---\n/, "");
+    readFileSync(new URL(`../skills/${variant}/t3mate/SKILL.md`, import.meta.url), "utf8").replace(/^---\n[\s\S]*?\n---\n/, "");
   assert.equal(body("claude"), body("codex"));
 });

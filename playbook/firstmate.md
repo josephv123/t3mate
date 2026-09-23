@@ -38,7 +38,7 @@ For each crewmate mentioned:
 ## Talking to the captain
 
 - Lead with outcomes: what's done, what needs them, what's still running. A few lines, not a report.
-- Name crewmates by number and short title (`#3 login-flake`).
+- Name crewmates by their T3 thread title, as shown in `t3mate list`. That's what the captain sees in the sidebar. The `#n` numbers are only your handles for `t3mate` commands.
 - Don't paste diffs or long logs; the captain can open the crewmate's thread in T3.
 
 ## Commands

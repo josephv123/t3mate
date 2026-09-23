@@ -1,6 +1,6 @@
 # t3mate
 
-A first mate for [T3 Code](https://github.com/pingdotgg/t3code). Type `$firstmate` in any T3 thread, in any project, on any harness (Claude Code, Codex, Cursor, …), and that thread becomes the project's **first mate**. You tell it what you want; it splits the work into tasks, hands each one to a **crewmate** (its own T3 thread in its own T3 worktree), watches them at no model cost, reviews what comes back, and gives you short updates. Everything is a normal T3 thread, so it all works from the T3 phone app too.
+A first mate for [T3 Code](https://github.com/pingdotgg/t3code). Type `$t3mate` in any T3 thread, in any project, on any harness (Claude Code, Codex, Cursor, …), and that thread becomes the project's **first mate**. You tell it what you want; it splits the work into tasks, hands each one to a **crewmate** (its own T3 thread in its own T3 worktree), watches them at no model cost, reviews what comes back, and gives you short updates. Everything is a normal T3 thread, so it all works from the T3 phone app too.
 
 Inspired by [firstmate](https://github.com/kunchenguid/firstmate), rebuilt around T3 as the only UI: no tmux or herdr, no running from a special directory, and nothing to set up per project or per harness.
 
@@ -20,12 +20,14 @@ git clone <this repo> ~/t3mate && ~/t3mate/bin/t3mate install && t3mate doctor
 `install` does the following:
 
 - links `t3mate` into `~/.local/bin`
-- links the `firstmate` skill into `~/.claude/skills`, `~/.codex/skills` and `~/.cursor/skills`
+- links the `t3mate` skill into `~/.claude/skills`, `~/.codex/skills` and `~/.cursor/skills`
 - writes `~/.t3mate/config.toml`
 - issues a 90-day T3 access token (label `t3mate`) into Keychain
 - starts the launchd daemon (`com.t3mate.daemon`)
 
 Requires macOS, Node ≥ 23.6 (it runs the TypeScript directly), and the T3 Code desktop app running.
+
+**After the first install, quit and reopen T3 Code once.** T3 keeps each project's skill list in memory until it restarts, so `$t3mate` won't appear in the picker before that.
 
 Once the repo is installed, `git pull` updates it; nothing needs re-running unless the release notes say so.
 
@@ -34,12 +36,12 @@ Once the repo is installed, `git pull` updates it; nothing needs re-running unle
 In T3, open any project, pick any model, and send:
 
 ```
-$firstmate fix the flaky login test, and figure out why the dashboard is slow
+$t3mate fix the flaky login test, and figure out why the dashboard is slow
 ```
 
-The thread claims itself, then works from the playbook in [`playbook/firstmate.md`](playbook/firstmate.md). Crewmate threads appear in the sidebar as `#1 …`, `#2 …`. You can open, watch or step into any of them. Crew updates arrive in the first mate's thread as `[t3mate] Crew update:` messages.
+The thread claims itself, then works from the playbook in [`playbook/firstmate.md`](playbook/firstmate.md). Crewmate threads appear in the sidebar under the titles T3 generates for them, and the first mate refers to them by those same titles. You can open, watch or step into any of them. Crew updates arrive in the first mate's thread as `[t3mate] Crew update:` messages.
 
-Running `$firstmate` again in another thread moves the role there. Each project has one first mate.
+Running `$t3mate` again in another thread moves the role there. Each project has one first mate.
 
 ## How it maps onto T3
 
@@ -111,5 +113,5 @@ src/config.ts       layered TOML config + model resolution
 src/state.ts        per-project state with a file lock
 src/install.ts      install / uninstall / doctor / launchd
 playbook/           the first mate playbook and the crewmate brief
-skills/             the `firstmate` skill (claude+cursor variant, codex variant)
+skills/             the `t3mate` skill (claude+cursor variant, codex variant)
 ```

@@ -4,13 +4,17 @@ import { delimiter, join } from "node:path";
 import { globalConfigPath } from "./config.ts";
 import { daemonPid } from "./daemon.ts";
 import { T3_APP, TOKEN_LABEL, getShell, issueToken, origin, readToken, storeToken, t3cli } from "./t3.ts";
-import { REPO_ROOT, T3MATE_HOME, run, tryRun } from "./util.ts";
+import { REPO_ROOT, T3MATE_HOME, run, sleep, tryRun } from "./util.ts";
 
 const HOME = homedir();
 const BIN_LINK = join(HOME, ".local", "bin", "t3mate");
 const LAUNCHD_LABEL = "com.t3mate.daemon";
 const PLIST = join(HOME, "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
 export const DAEMON_LOG = join(T3MATE_HOME, "daemon.log");
+
+export const SKILL_NAME = "t3mate";
+/** Names earlier versions installed under; removed on install if they point into this repo. */
+const LEGACY_SKILL_NAMES = ["firstmate"];
 
 /**
  * Skill install targets: [harness home, skills dir, variant]. Claude and Cursor honor
@@ -34,6 +38,19 @@ function link(target: string, path: string): string {
   if (existing !== null) rmSync(path);
   symlinkSync(target, path);
   return `linked   ${path} -> ${target}`;
+}
+
+/** Remove a symlink only if it points into this repo. */
+function unlinkOwned(path: string): string | null {
+  try {
+    if (lstatSync(path).isSymbolicLink() && readlinkSync(path).startsWith(REPO_ROOT)) {
+      rmSync(path);
+      return `removed  ${path}`;
+    }
+  } catch {
+    // absent
+  }
+  return null;
 }
 
 const CONFIG_TEMPLATE = `# t3mate global config. Layers (later wins):
@@ -92,12 +109,24 @@ function plist(): string {
 
 const uid = (): string => String(process.getuid?.() ?? run("id", ["-u"]));
 
-export function daemonInstall(): string {
+const loaded = (): boolean => tryRun("launchctl", ["print", `gui/${uid()}/${LAUNCHD_LABEL}`]) !== null;
+
+export async function daemonInstall(): Promise<string> {
   mkdirSync(join(HOME, "Library", "LaunchAgents"), { recursive: true });
   mkdirSync(T3MATE_HOME, { recursive: true });
+  // bootout returns before the job is gone; bootstrapping too early fails with EIO.
   tryRun("launchctl", ["bootout", `gui/${uid()}/${LAUNCHD_LABEL}`]);
+  for (let i = 0; i < 50 && loaded(); i++) await sleep(100);
   writeFileSync(PLIST, plist());
-  run("launchctl", ["bootstrap", `gui/${uid()}`, PLIST]);
+  for (let attempt = 1; ; attempt++) {
+    try {
+      run("launchctl", ["bootstrap", `gui/${uid()}`, PLIST]);
+      break;
+    } catch (error) {
+      if (attempt >= 5) throw error;
+      await sleep(500 * attempt);
+    }
+  }
   return `daemon   launchd ${LAUNCHD_LABEL} (log: ${DAEMON_LOG})`;
 }
 
@@ -146,13 +175,24 @@ export async function install(opts: { rotateToken: boolean; noDaemon: boolean })
     out.push(`WARNING  ~/.local/bin is not on PATH; agents won't find \`t3mate\``);
   }
 
+  let skillsChanged = false;
   for (const [harnessHome, skillsDir, variant] of SKILL_TARGETS) {
     if (!existsSync(harnessHome)) {
       out.push(`skip     ${skillsDir} (harness not installed)`);
       continue;
     }
     mkdirSync(skillsDir, { recursive: true });
-    out.push(link(join(REPO_ROOT, "skills", variant, "firstmate"), join(skillsDir, "firstmate")));
+    for (const legacy of LEGACY_SKILL_NAMES) {
+      const removed = unlinkOwned(join(skillsDir, legacy));
+      if (removed) out.push(removed);
+    }
+    const result = link(join(REPO_ROOT, "skills", variant, SKILL_NAME), join(skillsDir, SKILL_NAME));
+    skillsChanged ||= !result.startsWith("ok");
+    out.push(result);
+  }
+  if (skillsChanged) {
+    // T3 caches each project's skill list in memory until the app restarts.
+    out.push(`NOTE     Quit and reopen T3 Code once so its $ picker shows the "${SKILL_NAME}" skill.`);
   }
 
   mkdirSync(T3MATE_HOME, { recursive: true });
@@ -169,21 +209,16 @@ export async function install(opts: { rotateToken: boolean; noDaemon: boolean })
     out.push("token    ok");
   }
 
-  if (!opts.noDaemon) out.push(daemonInstall());
+  if (!opts.noDaemon) out.push(await daemonInstall());
   return out;
 }
 
 export function uninstall(): string[] {
   const out = [daemonUninstall()];
   for (const [, skillsDir] of SKILL_TARGETS) {
-    const path = join(skillsDir, "firstmate");
-    try {
-      if (lstatSync(path).isSymbolicLink() && readlinkSync(path).startsWith(REPO_ROOT)) {
-        rmSync(path);
-        out.push(`removed  ${path}`);
-      }
-    } catch {
-      // absent
+    for (const name of [SKILL_NAME, ...LEGACY_SKILL_NAMES]) {
+      const removed = unlinkOwned(join(skillsDir, name));
+      if (removed) out.push(removed);
     }
   }
   try {
@@ -214,7 +249,7 @@ export async function doctor(): Promise<string[]> {
   check(await tokenWorks(), `T3 API at ${origin()} with Keychain token`, "open T3 Code, then `t3mate install --rotate-token`");
   check(tryRun("which", ["t3mate"]) !== null, "t3mate on PATH", "run `t3mate install`; ensure ~/.local/bin is on PATH");
   for (const [harnessHome, skillsDir] of SKILL_TARGETS) {
-    if (existsSync(harnessHome)) check(existsSync(join(skillsDir, "firstmate", "SKILL.md")), `skill in ${skillsDir}`, "run `t3mate install`");
+    if (existsSync(harnessHome)) check(existsSync(join(skillsDir, SKILL_NAME, "SKILL.md")), `skill in ${skillsDir}`, "run `t3mate install`");
   }
   const pid = daemonPid();
   check(pid !== null, `daemon running${pid ? ` (pid ${pid})` : ""}`, "`t3mate daemon install`");

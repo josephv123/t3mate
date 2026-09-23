@@ -9,8 +9,10 @@ import { T3MATE_HOME, sleep } from "./util.ts";
 export type CrewKind = "ship" | "scout";
 
 export interface CrewMember {
+  /** Stable handle for CLI commands; the captain knows crewmates by their T3 title. */
   n: number;
   threadId: string;
+  /** Title given at spawn; T3 replaces the thread's title with a generated one. */
   title: string;
   kind: CrewKind;
   task: string;
@@ -24,8 +26,6 @@ export interface CrewMember {
     approvalNotified?: boolean;
     inputNotified?: boolean;
     stallNotifiedTurnId?: string;
-    /** "#n " prefix applied after T3 generated the thread title (and branch name). */
-    titled?: boolean;
   };
 }
 

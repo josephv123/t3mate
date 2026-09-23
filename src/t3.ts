@@ -64,7 +64,6 @@ export interface ShellThread {
   hasPendingApprovals: boolean;
   hasPendingUserInput: boolean;
   archivedAt: string | null;
-  titleState?: { source: "manual" | "generated"; needsRefinement: boolean } | null;
   pullRequests?: PullRequestRef[];
   branchPullRequest?: PullRequestRef | null;
 }
@@ -270,11 +269,6 @@ export async function sendMessage(
     interactionMode: thread.interactionMode,
     createdAt: nowIso(),
   });
-}
-
-/** Set a thread's title. T3 treats it as manual, so it won't regenerate it. */
-export async function renameThread(threadId: string, title: string): Promise<void> {
-  await dispatch({ type: "thread.meta.update", commandId: newId(), threadId, title });
 }
 
 export async function archiveThread(threadId: string): Promise<void> {

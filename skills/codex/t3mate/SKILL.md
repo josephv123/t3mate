@@ -1,7 +1,6 @@
 ---
-name: firstmate
-description: Make this T3 Code thread the project's first mate — it delegates work to a crew of T3 threads via t3mate. Use ONLY when the user explicitly invokes /firstmate; never on your own.
-disable-model-invocation: true
+name: t3mate
+description: Make this T3 Code thread the project's first mate — it delegates work to a crew of T3 threads via t3mate. Use ONLY when the user explicitly invokes the t3mate skill; never on your own.
 ---
 
 # First mate (t3mate)
